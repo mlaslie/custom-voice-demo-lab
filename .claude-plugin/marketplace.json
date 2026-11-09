@@ -1,0 +1,14 @@
+{
+  "name": "voice-demo-lab",
+  "description": "Voice Demo Lab: narrated demo videos in your custom Gemini TTS voice.",
+  "owner": {
+    "name": "Matthew Laslie"
+  },
+  "plugins": [
+    {
+      "name": "custom-voice-demo-lab",
+      "source": "./",
+      "description": "Narrated demo videos in your custom Gemini TTS voice."
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+*.env
+client_secret*.json
+node_modules/
+web/dist/
+.DS_Store
+/build/
+/renders/
+.claude/
+*.tsbuildinfo
