@@ -1,16 +1,18 @@
 import { AudioLines, FolderKanban, Settings as SettingsIcon } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Link, NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { Link, NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { api, type Settings } from "./api";
 import ProjectPage from "./pages/Project";
 import Projects from "./pages/Projects";
 import SettingsPage from "./pages/Settings";
+import Setup from "./pages/Setup";
 
 export default function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const loc = useLocation();
   useEffect(() => { api.settings().then(setSettings).catch(() => {}); }, [loc.pathname]);
-  const ready = settings && settings.voice_id && settings.gemini_key_set;
+  const ready = settings && !settings.setup_needed;
+  const switchTo = (id: string) => api.activateProfile(id).then(setSettings).catch(() => {});
 
   const nav = ({ isActive }: { isActive: boolean }) =>
     `flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition ${
@@ -32,19 +34,27 @@ export default function App() {
         </nav>
         {settings && (
           <div className="hidden md:mt-auto md:block">
-            <Link to="/settings" className="block rounded-xl border border-zinc-200 p-3 text-xs hover:border-brand-500 dark:border-zinc-800">
-              <div className="mb-1 flex items-center gap-1.5 font-medium">
+            <div className="rounded-xl border border-zinc-200 p-3 text-xs dark:border-zinc-800">
+              <div className="mb-1.5 flex items-center gap-1.5 font-medium">
                 <span className={`size-2 rounded-full ${ready ? "bg-emerald-500" : "bg-amber-500"}`} />
-                {ready ? "Voice ready" : "Setup needed"}
+                {ready ? "Narrator voice" : "Setup needed"}
               </div>
-              <div className="truncate text-zinc-500">{settings.voice_id || "No voice id"}</div>
+              {settings.profiles.length > 1 ? (
+                <select className="input py-1 text-xs" value={settings.active_profile} onChange={(e) => switchTo(e.target.value)} aria-label="Active voice">
+                  {settings.profiles.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+                </select>
+              ) : (
+                <Link to={ready ? "/settings" : "/setup"} className="block truncate text-zinc-500 hover:text-brand-600">{settings.active?.name ?? "Add a key and a voice"}</Link>
+              )}
               {settings.fake_gemini && <div className="mt-1 font-medium text-violet-600">Test mode (no Gemini calls)</div>}
-            </Link>
+            </div>
           </div>
         )}
       </aside>
       <main className="min-w-0 flex-1 px-4 py-6 md:px-10 md:py-8">
+        {settings?.setup_needed && !["/setup", "/settings"].includes(loc.pathname) && <Navigate to="/setup" replace />}
         <Routes>
+          <Route path="/setup" element={<Setup settings={settings} onChange={setSettings} />} />
           <Route path="/" element={<Projects settings={settings} />} />
           <Route path="/settings" element={<SettingsPage onChange={setSettings} />} />
           <Route path="/projects/:id" element={<ProjectPage />} />

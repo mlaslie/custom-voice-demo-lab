@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, CheckCircle2, FastForward, KeyRound, MousePointerClick, PlayCircle, Plus, Trash2, Wand2, XCircle } from "lucide-react";
+import { ArrowDown, ArrowUp, CheckCircle2, FastForward, KeyRound, MousePointerClick, PlayCircle, Plus, Trash2, XCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, checkUrl, newAction, type Action, type ActionOp, type Segment } from "../../api";
 import { JobStatus, useJob } from "../../components/hooks";
@@ -20,7 +20,6 @@ const OPS: { op: ActionOp; label: string; needs: ("selector" | "value" | "second
 
 export default function RehearseTab({ project: p, setProject, refresh, goto }: TabProps) {
   const [err, setErr] = useState("");
-  const explore = useJob(() => refresh());
   const dry = useJob(() => refresh());
   const login = useJob(() => refresh());
   const steps = p.segments.filter((s) => s.type === "step");
@@ -34,7 +33,7 @@ export default function RehearseTab({ project: p, setProject, refresh, goto }: T
     );
   }
   const failures = p.checks.filter((c) => !c.ok);
-  const busy = explore.running || dry.running || login.running;
+  const busy = dry.running || login.running;
   const run = (j: ReturnType<typeof useJob>, fn: () => Promise<import("../../api").Job>) => { setErr(""); j.start(fn()).catch((e) => setErr(e.message)); };
 
   return (
@@ -47,22 +46,16 @@ export default function RehearseTab({ project: p, setProject, refresh, goto }: T
             {p.has_login && <Button size="sm" variant="ghost" onClick={async () => setProject(await api.forgetLogin(p.id))}>Forget</Button>}
           </div>
         </ToolBlock>
-        <ToolBlock icon={<Wand2 className="size-4" />} title="Plan actions with AI" text="Gemini opens the app, reads each page and plans the clicks for every step. You can edit the result.">
-          <Button size="sm" variant="primary" busy={explore.running} disabled={busy || !p.base_url}
-            onClick={() => (!steps.some((s) => s.actions.length) || confirm("Replan every step? Your edited actions will be replaced.")) && run(explore, () => api.explore(p.id))}>
-            Plan all steps
-          </Button>
-        </ToolBlock>
         <ToolBlock icon={<PlayCircle className="size-4" />} title="Dry run" text={p.checks.length ? (failures.length ? `${failures.length} action(s) failed in the last run.` : "Last run: every action worked.") : "Runs every action headless, without narration, and checks each one works."}>
           <Button size="sm" busy={dry.running} disabled={busy || !p.base_url} onClick={() => run(dry, () => api.dryrun(p.id))}>Run check</Button>
         </ToolBlock>
       </div>
       {err && <Alert>{err}</Alert>}
-      <JobStatus job={explore.job ?? dry.job ?? login.job} />
+      <JobStatus job={dry.job ?? login.job} />
 
       {steps.map((s, n) => (
         <StepActions key={s.id} n={n} s={s} pid={p.id} checks={p.checks.filter((c) => c.segment_id === s.id)} disabled={busy}
-          onSaved={setProject} onReplan={() => run(explore, () => api.explore(p.id, [s.id]))} />
+          onSaved={setProject} />
       ))}
 
       <div className="flex justify-end">
@@ -82,9 +75,9 @@ function ToolBlock({ icon, title, text, children }: { icon: React.ReactNode; tit
   );
 }
 
-function StepActions({ n, s, pid, checks, disabled, onSaved, onReplan }: {
+function StepActions({ n, s, pid, checks, disabled, onSaved }: {
   n: number; s: Segment; pid: string; checks: import("../../api").Check[]; disabled: boolean;
-  onSaved: (p: import("../../api").Project) => void; onReplan: () => void;
+  onSaved: (p: import("../../api").Project) => void;
 }) {
   const [acts, setActs] = useState<Action[]>(s.actions);
   const [dirty, setDirty] = useState(false);
@@ -110,12 +103,11 @@ function StepActions({ n, s, pid, checks, disabled, onSaved, onReplan }: {
         <span className="font-medium">{s.title || "Untitled step"}</span>
         {checks.length > 0 && (failed ? <Badge tone="red"><XCircle className="size-3" />failed</Badge> : <Badge tone="green"><CheckCircle2 className="size-3" />ok</Badge>)}
         {dirty && <span className="text-xs text-zinc-400">saving…</span>}
-        <Button size="sm" variant="ghost" className="ml-auto" disabled={disabled} icon={<Wand2 className="size-3.5" />} onClick={onReplan}>Replan</Button>
       </div>
       <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_260px]">
         <div className="min-w-0 space-y-2">
           <p className="text-sm italic text-zinc-500">“{s.narration || "No narration"}”</p>
-          {acts.length === 0 && <p className="text-sm text-zinc-500">No actions yet. Plan with AI or add one.</p>}
+          {acts.length === 0 && <p className="text-sm text-zinc-500">No actions yet. Ask your coding agent to add them, or add one here.</p>}
           {acts.map((a, i) => {
             const meta = OPS.find((o) => o.op === a.op)!;
             const bad = failed && failed.index === i;

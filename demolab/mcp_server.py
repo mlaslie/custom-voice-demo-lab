@@ -1,12 +1,14 @@
-"""MCP server (stdio) for Claude Code and Google Antigravity: the same operations as the web app.
+"""MCP server (stdio) for Claude Code and Google Antigravity.
 
-The service holds all state; these tools are thin calls to it, so the agent and the web app always see the
-same project. The Gemini API key is never accepted or returned here: users set it in the web app.
+The coding session is the context: its model has analyzed the code, slides or app with the user, and it
+writes the narration script itself (script_guide, write_script). The plugin checks the script, the user
+reviews and approves it in the studio (shown in the session's side panel), and only then does Gemini TTS
+voice it and the video get rendered. The service holds all state; these tools are thin calls to it. The
+Gemini API key is never accepted or returned here: users enter it on the studio's setup page.
 """
 from __future__ import annotations
 
 import json
-import pathlib
 import webbrowser
 
 from mcp.server.mcpserver import MCPServer
@@ -16,29 +18,43 @@ from . import client
 
 READ = ToolAnnotations(readOnlyHint=True)
 
-mcp = MCPServer("voice-demo-lab", version="0.1.4", instructions=(
-    "Voice Demo Lab makes narrated demo videos (custom Gemini TTS voice) of web apps and slide decks. "
-    "Flow: create_project -> add_session_context (when the request comes out of a working session) -> "
-    "add_source (url/repo/pptx/pdf/gslides/text) -> draft_script (or set_segments) "
-    "-> the user reviews in the web app (open_studio(open_browser=false), then show the URL in your host's "
-    "side panel / built-in browser if it has one; open it as soon as the project exists) -> approve_script ONLY when the user says so -> "
-    "plan_actions + dry_run for web steps -> render. Never ask for or handle the Gemini API key: tell the "
-    "user to add it in the web app's Settings."))
+mcp = MCPServer("voice-demo-lab", version="0.3.0", instructions=(
+    "Voice Demo Lab turns what this coding session analyzed (code, slides, a running app) into a narrated "
+    "demo video, in the user's custom or a standard Gemini TTS voice. YOU write the script from the session; "
+    "the plugin checks it, voices it and renders it. Flow: get_settings (if setup_needed: "
+    "open_studio(page='setup', open_browser=false), show it in your side panel / built-in browser, and wait "
+    "for the user to add a key and choose a voice) -> start_demo (attach the decks the session used; set "
+    "base_url for a live app) -> open the returned studio_url in your side panel -> script_guide -> "
+    "write_script (fix its errors; consider its warnings) -> summarise it in chat; the user reviews, edits "
+    "and approves in the side panel (call approve_script only if they approve in chat) -> for web steps: "
+    "capture_login if needed, inspect_page for selectors, dry_run until it passes -> render. Voices: "
+    "list_voice_profiles, use_voice_profile. Never ask for, accept or repeat a Gemini API key in chat or "
+    "tool calls, even if offered: send the user to the setup page."))
 
 
-def _summary(p: dict) -> dict:
-    return {
+def _decks(p: dict) -> list[dict]:
+    """Each deck with its slides' text and speaker notes, so the script can say what each slide means."""
+    return [{"label": s["label"], "slides": f"{s['slide_offset']}..{s['slide_offset'] + s['slide_count'] - 1}"
+             if s["slide_count"] else "none (text only)", "content": s["text"][:12000]}
+            for s in p["sources"] if s["kind"] in ("pptx", "pdf", "gslides")]
+
+
+def _summary(p: dict, decks: bool = False) -> dict:
+    out = {
         "id": p["id"], "name": p["name"], "base_url": p["base_url"], "goal": p["goal"],
-        "instructions": p["instructions"], "script_approved": p["script_approved"], "has_login": p["has_login"],
-        "slides": len(p["slides"]),
-        "sources": [{"id": s["id"], "kind": s["kind"], "label": s["label"], "slides": s["slide_count"],
-                     "first_slide": s["slide_offset"]} for s in p["sources"]],
+        "audience": p.get("audience", ""), "instructions": p["instructions"],
+        "voice_profile": p.get("profile_id") or "(active profile)",
+        "script_approved": p["script_approved"], "has_login": p["has_login"],
+        "slide_count": len(p["slides"]),
         "segments": [{k: v for k, v in s.items() if v not in ("", [], None) or k in ("type", "narration")}
                      for s in p["segments"]],
         "failed_checks": [c for c in p["checks"] if not c["ok"]],
         "renders": [r["file"] for r in p["renders"]],
         "studio_url": f"{client.BASE}/projects/{p['id']}",
     }
+    if decks:
+        out["decks"] = _decks(p)
+    return out
 
 
 def _job(j: dict) -> dict:
@@ -46,14 +62,15 @@ def _job(j: dict) -> dict:
 
 
 @mcp.tool()
-def open_studio(project_id: str = "", open_browser: bool = True) -> str:
+def open_studio(project_id: str = "", open_browser: bool = True, page: str = "") -> str:
     """Start the Voice Demo Lab web app (if needed) and return its URL, so the user can review and edit the
-    script, preview the voice, and manage Settings (voice id, key).
+    script, preview the voice, and manage voices and keys. page: "" (a project, or the project list), "setup"
+    (first run: the user adds a Gemini API key and picks a voice) or "settings" (voice profiles and keys).
     If your host has a built-in browser or preview pane beside the chat (the Claude desktop app's browser
     pane, Antigravity's browser), pass open_browser=false and open the returned URL there yourself, so the
     studio sits beside the conversation. With open_browser=true it opens in the system browser instead."""
     base = client.ensure_server()
-    url = f"{base}/projects/{project_id}" if project_id else base
+    url = f"{base}/{page}" if page in ("setup", "settings") else f"{base}/projects/{project_id}" if project_id else base
     if open_browser:
         webbrowser.open(url)
     return url
@@ -61,23 +78,63 @@ def open_studio(project_id: str = "", open_browser: bool = True) -> str:
 
 @mcp.tool(annotations=READ)
 def get_settings() -> dict:
-    """Voice id, style, models, output folder, and whether a Gemini key / Google sign-in is configured."""
-    return client.call("GET", "/api/settings")
+    """Setup state (setup_needed, setup_url), the active voice profile, saved profiles, key names (never
+    the keys), models, output folder and Google sign-in."""
+    st = client.call("GET", "/api/settings")
+    return {**{k: st[k] for k in ("setup_needed", "tts_model", "output_dir", "audience",
+                                  "google_connected", "fake_gemini")},
+            "setup_url": f"{client.BASE}/setup",
+            "active_profile": _profile(st["active"]) if st["active"] else None,
+            "profiles": [_profile(v) for v in st["profiles"]],
+            "keys": [{"id": k["id"], "name": k["name"], "ends_with": k["hint"]} for k in st["keys"]]}
+
+
+def _profile(v: dict) -> dict:
+    return {k: v[k] for k in ("id", "name", "description", "voice_name", "voice", "kind", "style")}
 
 
 @mcp.tool()
-def update_settings(voice_id: str | None = None, voice_style: str | None = None, tts_model: str | None = None,
-                    script_model: str | None = None, output_dir: str | None = None,
+def update_settings(tts_model: str | None = None, output_dir: str | None = None,
                     google_client_secret: str | None = None, audience: str | None = None) -> dict:
-    """Change non-secret settings. The API key is set by the user in the web app, never through this tool."""
-    cur = client.call("GET", "/api/settings")
-    keys = ("voice_id", "voice_style", "tts_model", "script_model", "output_dir", "google_client_secret", "audience")
-    body = {k: cur[k] for k in keys}
-    body.update({k: v for k, v in dict(voice_id=voice_id, voice_style=voice_style, tts_model=tts_model,
-                                        script_model=script_model, output_dir=output_dir,
-                                        google_client_secret=google_client_secret, audience=audience).items()
-                 if v is not None})
-    return client.call("PUT", "/api/settings", json=body)
+    """Change non-secret settings. Keys and voices are managed by the user on the setup/settings pages."""
+    body = {k: v for k, v in dict(tts_model=tts_model, output_dir=output_dir,
+                                  google_client_secret=google_client_secret, audience=audience).items()
+            if v is not None}
+    client.call("PUT", "/api/settings", json=body)
+    return get_settings()
+
+
+@mcp.tool(annotations=READ)
+def list_voice_profiles() -> dict:
+    """The saved voice profiles (each a saved API key paired with a custom or standard voice and a delivery
+    style) and which one is active."""
+    st = client.call("GET", "/api/settings")
+    return {"active": st["active_profile"], "profiles": [_profile(v) for v in st["profiles"]],
+            "setup_needed": st["setup_needed"], "settings_url": f"{client.BASE}/settings"}
+
+
+def _find_profile(st: dict, profile: str) -> dict:
+    want = profile.lower().strip()
+    for v in st["profiles"]:
+        if want in (v["id"].lower(), v["name"].lower()):
+            return v
+    names = ", ".join(v["name"] for v in st["profiles"]) or "none yet"
+    raise ValueError(f"No voice profile called {profile!r}. Saved profiles: {names}. The user can add one "
+                     f"at {client.BASE}/settings.")
+
+
+@mcp.tool()
+def use_voice_profile(profile: str, project_id: str = "") -> dict:
+    """Switch voices. profile: a saved profile's name or id (case-insensitive; list_voice_profiles shows each
+    one's description). With project_id, only that project uses it (its narration is re-recorded at the
+    next render); without, it becomes the active profile for all projects that have not picked one. To add
+    a new voice or key, send the user to the settings page."""
+    v = _find_profile(client.call("GET", "/api/settings"), profile)
+    if project_id:
+        return _summary(client.call("PATCH", f"/api/projects/{project_id}", json={"profile_id": v["id"]})) | \
+            {"voice_profile": _profile(v)}
+    st = client.call("POST", f"/api/profiles/{v['id']}/activate")
+    return {"active": _profile(st["active"])}
 
 
 @mcp.tool(annotations=READ)
@@ -87,102 +144,94 @@ def list_projects() -> list:
 
 
 @mcp.tool()
-def create_project(name: str, base_url: str = "", goal: str = "", instructions: str = "") -> dict:
-    """Create a demo project. base_url: the web app to demo (if any). goal: what the demo must show.
-    instructions: tone, length, emphasis; overrides the default narration style."""
-    return _summary(client.call("POST", "/api/projects", json=dict(name=name, base_url=base_url, goal=goal,
-                                                                    instructions=instructions)))
+def start_demo(title: str, goal: str, brief: str, audience: str = "", instructions: str = "",
+               base_url: str = "", decks: list[str] | None = None, voice_profile: str = "") -> dict:
+    """Start a demo video from this session. Call it when the user asks for a demo of what the session
+    analyzed. Then open studio_url in your side panel, read script_guide and call write_script.
+    - title: the video's title.  goal: what the video must get across, in one or two sentences.
+    - brief: what this session established, in plain prose: what was analyzed or built, how it works, what
+      matters, decisions, what is unfinished or must not be shown. Shown to the user beside the script.
+    - audience: who will watch (default: new to the subject).  instructions: tone, length, emphasis.
+    - base_url: the running app to record, for live web steps (empty for slides-only videos).
+    - decks: the slide decks the session used: .pptx or .pdf paths, or Google Slides links. Their slides
+      become images for slide segments; the result lists each slide's text and speaker notes.
+    - voice_profile: a saved profile's name or id (default: the active one)."""
+    st = client.call("GET", "/api/settings")
+    if st["setup_needed"]:
+        return {"setup_needed": True, "setup_url": f"{client.BASE}/setup",
+                "next": "Open setup_url in your side panel and ask the user to add a Gemini API key and choose "
+                        "a voice there; call start_demo again once they are done."}
+    body = dict(name=title, goal=goal, brief=brief, audience=audience, instructions=instructions, base_url=base_url)
+    if voice_profile:
+        body["profile_id"] = _find_profile(st, voice_profile)["id"]
+    p = client.call("POST", "/api/projects", json=body)
+    problems = []
+    for ref in decks or []:
+        try:
+            p = client.call("POST", f"/api/projects/{p['id']}/decks", json={"ref": ref})
+        except RuntimeError as e:
+            problems.append(f"{ref}: {e}")
+    out = _summary(p, decks=True)
+    if problems:
+        out["deck_problems"] = problems
+    out["next"] = "Open studio_url in your side panel, read script_guide, then write_script."
+    return out
+
+
+@mcp.tool(annotations=READ)
+def script_guide() -> str:
+    """How to write the script: the segment format, actions for web steps, the user's house style, and
+    writing for a text-to-speech voice. Read it before write_script."""
+    from .script import GUIDE
+    return GUIDE
+
+
+@mcp.tool()
+def write_script(project_id: str, segments: list[dict]) -> dict:
+    """Save the narration script you wrote (the whole thing, in playing order; see script_guide). It is
+    checked first: if `errors` comes back, nothing was saved; fix them and call again. `warnings` are
+    style or reading-aloud issues worth fixing. Saving un-approves the script. Returns the estimated
+    length and the studio link, where the user reviews it beside the chat."""
+    try:
+        r = client.call("PUT", f"/api/projects/{project_id}/segments", json=segments)
+    except client.ApiError as e:
+        if isinstance(e.detail, dict) and "errors" in e.detail:
+            return {"saved": False, **e.detail}
+        raise
+    return {"saved": True, "warnings": r["warnings"], "estimated_minutes": round(r["seconds"] / 60, 1),
+            "segments": len(r["project"]["segments"]),
+            "segment_ids": [s["id"] for s in r["project"]["segments"]],
+            "studio_url": f"{client.BASE}/projects/{project_id}?tab=script",
+            "next": "Summarise the script in chat and ask the user to review and approve it in the side panel."}
 
 
 @mcp.tool(annotations=READ)
 def get_project(project_id: str) -> dict:
-    """The project with its full script (segments + actions), sources, failed checks and renders."""
-    return _summary(client.call("GET", f"/api/projects/{project_id}"))
+    """The project: brief, full script (segments + actions), decks with slide text and notes, failed
+    checks and renders. Read it again before revising: the user may have edited the script in the studio."""
+    return _summary(client.call("GET", f"/api/projects/{project_id}"), decks=True)
 
 
 @mcp.tool()
 def update_project(project_id: str, name: str | None = None, base_url: str | None = None, goal: str | None = None,
-                   instructions: str | None = None, voice_id: str | None = None,
-                   voice_style: str | None = None) -> dict:
-    """Edit project fields; voice_id/voice_style override the global voice for this project."""
-    body = {k: v for k, v in dict(name=name, base_url=base_url, goal=goal, instructions=instructions,
-                                  voice_id=voice_id, voice_style=voice_style).items() if v is not None}
-    return _summary(client.call("PATCH", f"/api/projects/{project_id}", json=body))
-
-
-@mcp.tool()
-def add_source(project_id: str, kind: str, ref: str = "", text: str = "", label: str = "") -> dict:
-    """Add demo material. kind:
-    - "url": a live page (ref = URL; captured with Playwright, uses the saved login if any)
-    - "repo": a local source folder (ref = path)
-    - "file": a local .pptx / .pdf / .md / .txt (ref = path); slides become slide images
-    - "gslides": a Google Slides URL or id (needs Google connected in Settings)
-    - "text": notes or an existing script (text = content)"""
-    if kind == "file":
-        f = pathlib.Path(ref).expanduser()
-        with f.open("rb") as fh:
-            p = client.call("POST", f"/api/projects/{project_id}/sources/upload",
-                            files={"file": (f.name, fh)}, data={"label": label})
-    else:
-        p = client.call("POST", f"/api/projects/{project_id}/sources",
-                        json=dict(kind=kind, ref=ref, text=text, label=label))
-    return _summary(p)
-
-
-@mcp.tool()
-def add_session_context(project_id: str, goal: str, built: str = "", decisions: str = "",
-                        highlights: str = "", caveats: str = "", audience: str = "",
-                        files: list[str] | None = None, workspace: str = "", label: str = "") -> dict:
-    """Give the script writer what this conversation knows. Call it before draft_script whenever the
-    demo is about work done or discussed in the current session; the script is built around it.
-    Write each field in plain prose from the conversation (facts, not instructions to the writer):
-    - goal: what the work is for and who it helps
-    - built: what was built or changed, including names of features, screens and commands
-    - decisions: notable choices and why they were made
-    - highlights: what the demo should show, in a sensible order
-    - caveats: what is unfinished, broken or must not be shown
-    - audience: who will watch, if the user said
-    files: paths of the files and folders that matter most (docs, specs, key source files, screenshots,
-    decks); relative paths resolve against `workspace` (the session's working folder). Keep it focused:
-    a few to a couple of dozen entries. Never include secrets such as .env files or keys."""
-    parts = [("Goal", goal), ("What was built or changed", built), ("Decisions and why", decisions),
-             ("What to show", highlights), ("Caveats (do not show or claim)", caveats), ("Audience", audience)]
-    brief = "\n\n".join(f"{h}:\n{v.strip()}" for h, v in parts if v and v.strip())
-    return _summary(client.call("POST", f"/api/projects/{project_id}/sources", json=dict(
-        kind="session", text=brief, files=files or [], ref=workspace, label=label or "Session context")))
-
-
-@mcp.tool()
-def draft_script(project_id: str) -> dict:
-    """Have Gemini draft the narration script from the sources (replaces the current script). Waits."""
-    j = client.wait_job(client.call("POST", f"/api/projects/{project_id}/script/draft"), timeout=600)
-    return {"job": _job(j), "project": _summary(client.call("GET", f"/api/projects/{project_id}"))}
-
-
-@mcp.tool()
-def set_segments(project_id: str, segments_json: str) -> dict:
-    """Replace the whole script (use when you write it yourself). JSON list of segments:
-    {"type": "card"|"slide"|"step", "title", "kicker", "sub", "bullets": [], "slide": <0-based index>,
-     "narration", "after_narration", "actions_at": "during"|"after", "notes", "actions": [...]}.
-    Action: {"op": goto|click|fill|press|hover|scroll|wait|wait_for|highlight|unhighlight, "selector"
-    (Playwright selector), "value", "seconds", "ff" (fast-forward long waits), "what", "label"}.
-    Existing segments keep their ids if you pass "id". Un-approves the script."""
-    segs = json.loads(segments_json)
-    return _summary(client.call("PUT", f"/api/projects/{project_id}/segments", json=segs))
+                   brief: str | None = None, audience: str | None = None, instructions: str | None = None,
+                   voice_style: str | None = None, decks: list[str] | None = None) -> dict:
+    """Edit project fields, or attach more decks. voice_style overrides the voice profile's delivery style
+    for this project ("" clears it). To give the project another voice, use use_voice_profile."""
+    body = {k: v for k, v in dict(name=name, base_url=base_url, goal=goal, brief=brief, audience=audience,
+                                  instructions=instructions, voice_style=voice_style).items() if v is not None}
+    p = client.call("PATCH", f"/api/projects/{project_id}", json=body)
+    for ref in decks or []:
+        p = client.call("POST", f"/api/projects/{project_id}/decks", json={"ref": ref})
+    return _summary(p, decks=bool(decks))
 
 
 @mcp.tool()
 def update_segment(project_id: str, segment_id: str, changes_json: str) -> dict:
-    """Patch one segment with a JSON object of fields (see set_segments). Un-approves the script."""
+    """Patch one segment with a JSON object of fields (see script_guide), e.g. to apply a change the user
+    asked for in chat. Un-approves the script."""
     return _summary(client.call("PATCH", f"/api/projects/{project_id}/segments/{segment_id}",
                                 json=json.loads(changes_json)))
-
-
-@mcp.tool()
-def revise_segment(project_id: str, segment_id: str, instruction: str) -> dict:
-    """Ask Gemini to rewrite one segment, e.g. "shorter", "explain what an API gateway is first"."""
-    return _summary(client.call("POST", f"/api/projects/{project_id}/segments/{segment_id}/revise",
-                                json={"instruction": instruction}))
 
 
 @mcp.tool()
@@ -200,25 +249,29 @@ def capture_login(project_id: str, url: str = "") -> dict:
 
 
 @mcp.tool()
-def plan_actions(project_id: str, segment_ids: list[str] | None = None) -> dict:
-    """AI-explore the web app: plan browser actions for step segments (all, or the given ids), executing
-    as it goes so each step is planned against the real page. Waits."""
-    j = client.wait_job(client.call("POST", f"/api/projects/{project_id}/explore",
-                                    json={"segment_ids": segment_ids}), timeout=1800)
-    return {"job": _job(j), "project": _summary(client.call("GET", f"/api/projects/{project_id}"))}
+def inspect_page(project_id: str, url: str = "") -> dict:
+    """Open a page of the app the way the recorder will (saved login included) and return its title,
+    visible text and interactive elements with ready-to-use selectors. url: a path or full URL (default:
+    the project's base_url). Use it to write or fix step actions."""
+    return client.call("POST", f"/api/projects/{project_id}/inspect", json={"url": url}, timeout=180)
 
 
 @mcp.tool()
 def dry_run(project_id: str) -> dict:
-    """Run every step's actions headless (no narration) and report which ones fail. Waits."""
+    """Run every web step's actions headless (no narration) and report which fail, with a screenshot of
+    the page at each failure (view it to see what went wrong). Fix with update_segment. Waits."""
+    from . import config
     j = client.wait_job(client.call("POST", f"/api/projects/{project_id}/dryrun"), timeout=1800)
     p = client.call("GET", f"/api/projects/{project_id}")
-    return {"job": _job(j), "failed_checks": [c for c in p["checks"] if not c["ok"]]}
+    shots = config.HOME / "projects" / project_id / "checks"
+    return {"job": _job(j), "failed_checks": [c | ({"screenshot": str(shots / c["shot"])} if c.get("shot") else {})
+                                              for c in p["checks"] if not c["ok"]],
+            "passed": sum(c["ok"] for c in p["checks"])}
 
 
 @mcp.tool()
 def preview_voice(text: str, project_id: str = "") -> str:
-    """Synthesize text in the configured custom voice; returns the path of the WAV file."""
+    """Synthesize text in the project's voice (else the active profile); returns the path of the WAV file."""
     from . import config
     data = client.call("POST", "/api/voice/preview", json={"text": text, "project_id": project_id or None})
     out = config.HOME / "previews" / "last_preview.wav"

@@ -14,7 +14,7 @@ import time
 from contextlib import contextmanager
 from urllib.parse import urljoin
 
-from . import config, gemini, store
+from . import store
 from .models import Action, Check, Project, Segment
 
 W, H = 1920, 1080
@@ -204,110 +204,6 @@ class Runner:
             self.rec.mark("ff_end")
         else:
             fn()
-
-
-# ---- AI exploration -----------------------------------------------------------------------------
-
-ACTION_SCHEMA = {
-    "type": "OBJECT",
-    "properties": {
-        "actions": {"type": "ARRAY", "items": {
-            "type": "OBJECT",
-            "properties": {
-                "op": {"type": "STRING", "enum": ["goto", "click", "fill", "press", "hover", "scroll", "wait",
-                                                  "wait_for", "highlight", "unhighlight"]},
-                "selector": {"type": "STRING"}, "value": {"type": "STRING"}, "seconds": {"type": "NUMBER"},
-                "ff": {"type": "BOOLEAN"}, "what": {"type": "STRING"}, "label": {"type": "STRING"}},
-            "required": ["op", "label"]}},
-        "note": {"type": "STRING"},
-    },
-    "required": ["actions"],
-}
-
-EXPLORE_SYSTEM = """You plan browser actions for a narrated product demo. You get one demo step (its narration),
-the current page (URL, visible text, interactive elements with ready-made Playwright selectors) and a
-screenshot. Return the smallest list of actions that makes the screen show what the narration describes.
-Rules:
-- Use selectors exactly as listed after "->" when possible; otherwise Playwright selectors such as
-  text="Exact text", role=button[name="Save"], or CSS.
-- Use highlight on the element the narration talks about before acting on it, when it helps viewers.
-- After an action that triggers loading, add wait_for on something that appears when it is done; set
-  ff=true with a short `what` if it may take more than ~10 seconds (it will be fast-forwarded).
-- goto only for the first step or when the narration moves to a different page.
-- Never sign in, enter secrets, buy, delete, or send anything. If the step needs that, return no actions
-  and explain in note.
-- Every action gets a short human label."""
-
-
-def _fake_actions(seg: Segment, snap: dict) -> list[Action]:
-    first = snap["elements"].splitlines()[:1]
-    acts = [Action(op="highlight", selector=first[0].split(" -> ", 1)[1], label="Highlight first control")] \
-        if first and " -> " in first[0] else []
-    return acts + [Action(op="wait", seconds=1, label="Pause")]
-
-
-def explore(job, pid: str, segment_ids: list[str] | None = None) -> dict:
-    """Plan actions for step segments in order, executing each step so the next sees the real page."""
-    p = store.get(pid)
-    st = config.load()
-    steps = [s for s in p.segments if s.type == "step" and (not segment_ids or s.id in segment_ids)]
-    if not p.base_url:
-        raise ValueError("Set the project's app URL first.")
-    planned = 0
-    with session(p) as page:
-        page.goto(p.base_url, wait_until="load", timeout=60000)
-        run = Runner(page, p.base_url)
-        for i, seg in enumerate(p.segments):
-            if seg.type != "step":
-                continue
-            target = seg in steps
-            if target:
-                job.say(f"Planning step: {seg.title or seg.narration[:50]}", planned / max(1, len(steps)))
-                snap = snapshot(page)
-                shot = page.screenshot(type="jpeg", quality=70)
-                acts, err = _plan(seg, snap, shot, p, st, None)
-                for attempt in range(2):
-                    try:
-                        for a in acts:
-                            run.run(a)
-                        err = None
-                        break
-                    except Exception as e:   # one repair round with the error and a fresh look
-                        err = f"{type(e).__name__}: {str(e)[:300]}"
-                        job.say(f"  action failed ({err[:80]}); re-planning")
-                        if attempt == 0:
-                            snap, shot = snapshot(page), page.screenshot(type="jpeg", quality=70)
-                            acts, _ = _plan(seg, snap, shot, p, st, err)
-                seg_id, final = seg.id, acts
-
-                def apply(q: Project, seg_id=seg_id, final=final, err=err):
-                    s = q.segment(seg_id)
-                    s.actions = final
-                    if err:
-                        s.notes = (s.notes + f"\n[explore] last error: {err}").strip()
-                store.mutate(pid, apply)
-                planned += 1
-            else:   # replay existing actions so later steps start from the right page
-                for a in seg.actions:
-                    try:
-                        run.run(a)
-                    except Exception:
-                        break
-    return {"planned": planned}
-
-
-def _plan(seg: Segment, snap: dict, shot: bytes, p: Project, st, error: str | None) -> tuple[list[Action], str]:
-    if config.fake_gemini():
-        return _fake_actions(seg, snap), ""
-    prompt = (f"Demo goal: {p.goal or p.name}\nApp base URL: {p.base_url}\n\n"
-              f"STEP TITLE: {seg.title}\nSTEP NARRATION: {seg.narration}\n"
-              f"AFTER-ACTION NARRATION: {seg.after_narration}\nAUTHOR NOTES: {seg.notes}\n\n"
-              f"CURRENT URL: {snap['url']}\nPAGE TITLE: {snap['title']}\n\nINTERACTIVE ELEMENTS:\n{snap['elements']}"
-              f"\n\nVISIBLE TEXT (truncated):\n{snap['text'][:5000]}")
-    if error:
-        prompt += f"\n\nYOUR PREVIOUS PLAN FAILED WITH: {error}\nThe page above is the state after the failure."
-    d = gemini.generate_json(prompt, ACTION_SCHEMA, st.script_model, images=[shot], system=EXPLORE_SYSTEM)
-    return [Action.model_validate(a) for a in d.get("actions", [])], d.get("note", "")
 
 
 # ---- dry run ------------------------------------------------------------------------------------

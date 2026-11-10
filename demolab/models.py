@@ -79,9 +79,12 @@ class Project(BaseModel):
     name: str
     base_url: str = ""
     goal: str = ""             # what the demo should show, in the author's words
+    brief: str = ""            # what the coding session found: the context the script was written from
+    audience: str = ""         # who will watch; empty = the default audience in settings
     instructions: str = ""     # tone, length, things to stress or skip
-    voice_id: str = ""         # overrides the global voice when set
-    voice_style: str = ""
+    profile_id: str = ""       # voice profile for this project; empty = the active profile
+    voice_id: str = ""         # overrides the profile's voice when set
+    voice_style: str = ""      # overrides the profile's style when set
     sources: list[Source] = []
     segments: list[Segment] = []
     slides: list[str] = []     # file names under slides/

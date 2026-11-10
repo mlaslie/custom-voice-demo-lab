@@ -1,6 +1,6 @@
 import { CheckCircle2, Loader2, Pause, Play, XCircle } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Job } from "../api";
+import { api, type Job, type PreviewWith } from "../api";
 
 /** Follow a background job until it finishes; onDone runs once when it does. */
 export function useJob(onDone?: (j: Job) => void) {
@@ -53,8 +53,9 @@ export function JobStatus({ job, compact }: { job: Job | null; compact?: boolean
   );
 }
 
-/** Speak text in the configured custom voice. */
-export function VoiceButton({ text, projectId, label = "Preview" }: { text: string; projectId?: string; label?: string }) {
+/** Speak text in a project's voice (else the active profile), a saved profile, or any voice of a saved key. */
+export function VoiceButton({ text, projectId, with: w, label = "Preview", title = "Hear it in this voice" }:
+  { text: string; projectId?: string; with?: PreviewWith; label?: string; title?: string }) {
   const [state, setState] = useState<"idle" | "loading" | "playing">("idle");
   const [err, setErr] = useState("");
   const audio = useRef<HTMLAudioElement | null>(null);
@@ -63,7 +64,7 @@ export function VoiceButton({ text, projectId, label = "Preview" }: { text: stri
     if (state === "playing") { audio.current?.pause(); setState("idle"); return; }
     setErr(""); setState("loading");
     try {
-      const blob = await api.preview(text, projectId);
+      const blob = await api.preview(text, { project_id: projectId, ...w });
       const a = new Audio(URL.createObjectURL(blob));
       audio.current = a;
       a.onended = () => setState("idle");
@@ -77,7 +78,7 @@ export function VoiceButton({ text, projectId, label = "Preview" }: { text: stri
         type="button"
         disabled={!text.trim()}
         onClick={play}
-        title={err || "Hear it in your custom voice"}
+        title={err || title}
         className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-40 dark:text-brand-100 dark:hover:bg-brand-700/25"
       >
         {state === "loading" ? <Loader2 className="size-3.5 animate-spin" /> : state === "playing" ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}

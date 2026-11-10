@@ -1,7 +1,8 @@
-"""Turn demo material into text digests (for script writing) and slide images (for slide segments).
+"""Decks the session worked with (PowerPoint, PDF, Google Slides) become slide images for slide segments,
+plus a text digest of each slide and its speaker notes for the session's model to write from.
 
-Slides from every deck source are appended to the project's slides/ folder as 1920x1080 PNGs; a source
-remembers its slide_offset so the script can refer to slides by a single project-wide index.
+Slides from every deck are appended to the project's slides/ folder as 1920x1080 PNGs; a deck remembers its
+slide_offset so the script can refer to slides by a single project-wide index.
 """
 from __future__ import annotations
 
@@ -20,16 +21,6 @@ from . import store
 from .models import Project, Source
 
 W, H = 1920, 1080
-REPO_BUDGET = 60_000
-SESSION_BUDGET = 60_000      # attached files of a session source
-SESSION_IMAGES = 8
-IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-SECRET_FILE = re.compile(r"(^\.env(\..*)?$|^client_secret.*|secrets?\.(json|ya?ml|toml)$|credentials.*\.json$"
-                         r"|\.(pem|key|p12|pfx|keystore)$|^id_(rsa|ed25519|ecdsa)$|^\.netrc$|token.*\.json$)", re.I)
-SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "dist", "build", "__pycache__", ".next", "target",
-             ".idea", ".vscode", "coverage", ".turbo", "vendor"}
-TEXT_EXT = {".md", ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".java", ".kt", ".rb", ".rs", ".cs", ".php",
-            ".html", ".vue", ".svelte", ".yaml", ".yml", ".toml", ".json", ".txt", ".sql", ".proto", ".sh"}
 
 
 def _letterbox(img: Image.Image) -> Image.Image:
@@ -71,10 +62,6 @@ def _slides_digest(texts: list[str], notes: list[str], offset: int) -> str:
 
 
 # ---- per kind -----------------------------------------------------------------------------------
-
-def add_text(p: Project, label: str, text: str) -> Source:
-    return Source(kind="text", label=label or "Notes", text=text.strip())
-
 
 def add_pdf(p: Project, path: pathlib.Path, label: str = "") -> Source:
     src = Source(kind="pdf", label=label or path.name, ref=str(path))
@@ -214,124 +201,16 @@ def _gs_text(elements: list[dict]) -> str:
     return "".join(out).strip()
 
 
-def add_repo(p: Project, path: str, label: str = "") -> Source:
-    root = pathlib.Path(path).expanduser().resolve()
-    if not root.is_dir():
-        raise FileNotFoundError(f"Not a folder: {root}")
-    tree, files = [], []
-    for dp, dns, fns in os.walk(root):
-        dns[:] = sorted(d for d in dns if d not in SKIP_DIRS and not d.startswith("."))
-        rel = pathlib.Path(dp).relative_to(root)
-        if len(rel.parts) <= 3:
-            tree += [str(rel / f) for f in sorted(fns)][:40]
-        files += [pathlib.Path(dp) / f for f in fns
-                  if pathlib.Path(f).suffix.lower() in TEXT_EXT and not SECRET_FILE.search(f)]
-
-    def rank(f: pathlib.Path) -> tuple:
-        n = f.name.lower()
-        r = str(f.relative_to(root)).lower()
-        return (0 if n.startswith("readme") else 1 if r.startswith("docs") or n.endswith(".md") else
-                2 if any(k in r for k in ("route", "page", "view", "app.", "main.", "index.", "api")) else 3,
-                len(f.relative_to(root).parts), r)
-
-    chunks, budget = [f"Repository: {root.name}\n\nFile tree (top levels):\n" + "\n".join(tree[:300])], REPO_BUDGET
-    for f in sorted(files, key=rank):
-        if budget <= 0:
-            break
-        try:
-            body = f.read_text(errors="ignore")[:8000]
-        except OSError:
-            continue
-        chunk = f"\n\n=== {f.relative_to(root)} ===\n{body}"
-        chunks.append(chunk[:budget])
-        budget -= len(chunk)
-    return Source(kind="repo", label=label or root.name, ref=str(root), text="".join(chunks))
-
-
-def add_url(p: Project, url: str, label: str = "") -> Source:
-    from .browser import snapshot_url
-    snap = snapshot_url(p, url)
-    if not p.base_url:
-        p.base_url = url
-    return Source(kind="url", label=label or snap["title"] or url, ref=url,
-                  text=f"Page: {snap['title']} ({url})\n\nVisible text:\n{snap['text']}\n\n"
-                       f"Interactive elements:\n{snap['elements']}")
-
-
-def add_session(p: Project, brief: str, files: list[str], label: str = "", workspace: str = "") -> Source:
-    """What the author's agent session knows: a brief it wrote, plus the files and folders it worked on.
-
-    Text files are inlined, folders get a short repo digest, decks give their text and notes (add the deck
-    as a file source to show its slides), and images are kept as screenshots for the script writer.
-    """
-    if not brief.strip() and not files:
-        raise ValueError("A session source needs a brief or at least one file.")
-    src = Source(kind="session", label=label or "Session context", ref=workspace)
-    base = pathlib.Path(workspace).expanduser() if workspace else None
-    chunks, skipped, budget = [], [], SESSION_BUDGET
-    img_dir = store.sub(p.id, "session")
-    for i, raw in enumerate(files):
-        f = pathlib.Path(raw).expanduser()
-        if not f.is_absolute() and base:
-            f = base / f
-        if SECRET_FILE.search(f.name):
-            skipped.append(f"{raw} (looks like a secret)")
-            continue
-        try:
-            if f.is_dir():
-                body = add_repo(p, str(f)).text[:max(0, min(budget, REPO_BUDGET // 3))]
-            elif f.suffix.lower() in IMAGE_EXT:
-                if len(src.images) >= SESSION_IMAGES:
-                    skipped.append(f"{raw} (image limit {SESSION_IMAGES})")
-                    continue
-                name = f"{src.id}_{i:02d}.jpg"
-                img = Image.open(f).convert("RGB")
-                img.thumbnail((1600, 1600))
-                img.save(img_dir / name, quality=85)
-                src.images.append(name)
-                src.files.append(raw)
-                chunks.append(f"\n\n=== {raw} ===\n[screenshot {len(src.images)} attached]")
-                continue
-            elif f.suffix.lower() == ".pdf":
-                body = "\n\n".join(_render_pdf(f)[1])
-            elif f.suffix.lower() == ".pptx":
-                from pptx import Presentation
-                body = "\n\n".join(sh.text_frame.text for sl in Presentation(str(f)).slides
-                                     for sh in sl.shapes if sh.has_text_frame)
-            elif f.suffix.lower() in TEXT_EXT or f.suffix.lower() in {".markdown", ".rst", ".csv", ".log", ""}:
-                body = f.read_text(errors="ignore")[:20_000]
-            else:
-                skipped.append(f"{raw} (unsupported type)")
-                continue
-        except (OSError, ValueError) as e:
-            skipped.append(f"{raw} ({e.__class__.__name__}: {e})")
-            continue
-        if budget <= 0:
-            skipped.append(f"{raw} (over the size budget)")
-            continue
-        chunk = f"\n\n=== {raw} ===\n{body}"[:budget]
-        chunks.append(chunk)
-        src.files.append(raw)
-        budget -= len(chunk)
-    src.text = brief.strip()
-    if chunks:
-        src.text += "\n\nATTACHED FILES:" + "".join(chunks)
-    if skipped:
-        src.label += f" ({len(skipped)} file{'s' if len(skipped) > 1 else ''} skipped)"
-        src.text += "\n\nNot read: " + "; ".join(skipped)
-    return src
-
-
-def add_upload(p: Project, filename: str, data: bytes, label: str = "") -> Source:
-    d = store.sub(p.id, "uploads")
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", filename)[-120:] or "upload"
-    path = d / safe
-    path.write_bytes(data)
+def add_deck(p: Project, ref: str, label: str = "") -> Source:
+    """A .pptx or .pdf path, or a Google Slides URL or id."""
+    if "docs.google.com/presentation" in ref or re.fullmatch(r"[A-Za-z0-9_-]{25,}", ref.strip()):
+        return add_gslides(p, ref, label)
+    path = pathlib.Path(ref).expanduser()
+    if not path.is_file():
+        raise FileNotFoundError(f"No such deck: {path}")
     ext = path.suffix.lower()
     if ext == ".pdf":
         return add_pdf(p, path, label)
     if ext == ".pptx":
         return add_pptx(p, path, label)
-    if ext in {".md", ".txt", ".markdown", ".rst"}:
-        return add_text(p, label or filename, data.decode(errors="ignore"))
-    raise ValueError(f"Unsupported file type {ext}: use .pptx, .pdf, .md or .txt")
+    raise ValueError(f"Unsupported deck type {ext}: use .pptx, .pdf or a Google Slides link")

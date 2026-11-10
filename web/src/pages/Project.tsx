@@ -1,15 +1,13 @@
-import { ArrowLeft, Check, ChevronDown, FileText, Film, MousePointerClick, PenLine } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Film, MessagesSquare, MousePointerClick, PenLine } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { api, type Project } from "../api";
+import { api, type Project, type Settings } from "../api";
 import { Alert, Field } from "../components/ui";
 import RehearseTab from "./project/RehearseTab";
 import RenderTab from "./project/RenderTab";
 import ScriptTab from "./project/ScriptTab";
-import SourcesTab from "./project/SourcesTab";
 
 const TABS = [
-  { key: "sources", label: "Sources", icon: FileText },
   { key: "script", label: "Script", icon: PenLine },
   { key: "rehearse", label: "Rehearse", icon: MousePointerClick },
   { key: "render", label: "Render", icon: Film },
@@ -27,6 +25,7 @@ export default function ProjectPage() {
   const { id = "" } = useParams();
   const [params, setParams] = useSearchParams();
   const [p, setP] = useState<Project | null>(null);
+  const [settings, setSettings] = useState<Settings | null>(null);
   const [err, setErr] = useState("");
   const [brief, setBrief] = useState(false);
 
@@ -36,18 +35,18 @@ export default function ProjectPage() {
     return x;
   }, [id]);
   useEffect(() => { refresh().catch((e) => setErr(e.message)); }, [refresh]);
+  useEffect(() => { api.settings().then(setSettings).catch(() => {}); }, []);
 
   if (err) return <Alert>{err}</Alert>;
   if (!p) return null;
 
   const steps = p.segments.filter((s) => s.type === "step");
   const done: Record<Tab, boolean> = {
-    sources: p.sources.length > 0,
     script: p.script_approved,
     rehearse: steps.length === 0 || (steps.every((s) => s.actions.length > 0) && p.checks.length > 0 && p.checks.every((c) => c.ok)),
     render: p.renders.length > 0,
   };
-  const tab = (params.get("tab") as Tab) || (p.segments.length ? "script" : "sources");
+  const tab = (TABS.some((t) => t.key === params.get("tab")) ? params.get("tab") : "script") as Tab;
   const goto = (t: Tab) => setParams({ tab: t });
 
   const saveBrief = async (patch: Partial<Project>) => setP(await api.patchProject(p.id, patch));
@@ -65,21 +64,31 @@ export default function ProjectPage() {
           <p className="mt-0.5 truncate text-sm text-zinc-500">{p.base_url || "Slides / explainer (no web app)"}</p>
         </div>
         <button onClick={() => setBrief(!brief)} className="inline-flex items-center gap-1 text-sm font-medium text-brand-700 dark:text-brand-100">
-          Brief & voice <ChevronDown className={`size-4 transition ${brief ? "rotate-180" : ""}`} />
+          Session brief & voice <ChevronDown className={`size-4 transition ${brief ? "rotate-180" : ""}`} />
         </button>
       </div>
 
       {brief && (
         <div className="card mb-5 grid gap-4 p-5 md:grid-cols-2">
           <Field label="Web app URL"><input className="input" defaultValue={p.base_url} onBlur={(e) => e.target.value !== p.base_url && saveBrief({ base_url: e.target.value.trim() })} placeholder="http://localhost:8090" /></Field>
-          <Field label="Voice id override" hint="Empty = the voice in Settings."><input className="input font-mono" defaultValue={p.voice_id} onBlur={(e) => e.target.value !== p.voice_id && saveBrief({ voice_id: e.target.value.trim() })} /></Field>
+          <Field label="Narrator voice" hint={<>Saved voices are managed in <Link className="underline" to="/settings">Settings</Link>.</>}>
+            <select className="input" value={p.profile_id} onChange={(e) => saveBrief({ profile_id: e.target.value })}>
+              <option value="">Active voice{settings?.active ? ` (${settings.active.name})` : ""}</option>
+              {settings?.profiles.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+            </select>
+          </Field>
+          <div className="md:col-span-2">
+            <span className="label flex items-center gap-1.5"><MessagesSquare className="size-3.5" />From your coding session</span>
+            <p className="whitespace-pre-wrap rounded-xl bg-zinc-50 p-3 text-sm leading-relaxed dark:bg-zinc-950">{p.brief || "No session brief."}</p>
+          </div>
           <Field label="Goal: what must the demo show?"><textarea className="input min-h-24" defaultValue={p.goal} onBlur={(e) => e.target.value !== p.goal && saveBrief({ goal: e.target.value })} /></Field>
-          <Field label="Instructions for the script writer" hint="Tone, length, what to stress or skip. Overrides the default style."><textarea className="input min-h-24" defaultValue={p.instructions} onBlur={(e) => e.target.value !== p.instructions && saveBrief({ instructions: e.target.value })} /></Field>
-          <Field label="Delivery style override" className="md:col-span-2"><input className="input" defaultValue={p.voice_style} onBlur={(e) => e.target.value !== p.voice_style && saveBrief({ voice_style: e.target.value })} placeholder="Empty = the style in Settings" /></Field>
+          <Field label="Audience"><input className="input" defaultValue={p.audience} onBlur={(e) => e.target.value !== p.audience && saveBrief({ audience: e.target.value })} placeholder="Default: new to the subject" /></Field>
+          <Field label="Instructions for the script" hint="Tone, length, what to stress or skip. Your agent reads these."><textarea className="input min-h-24" defaultValue={p.instructions} onBlur={(e) => e.target.value !== p.instructions && saveBrief({ instructions: e.target.value })} /></Field>
+          <Field label="Delivery style override" className="md:col-span-2"><input className="input" defaultValue={p.voice_style} onBlur={(e) => e.target.value !== p.voice_style && saveBrief({ voice_style: e.target.value })} placeholder="Empty = the voice's own style" /></Field>
         </div>
       )}
 
-      <nav className="mb-6 grid grid-cols-4 gap-1 rounded-2xl border border-zinc-200 bg-white p-1 dark:border-zinc-800 dark:bg-zinc-900">
+      <nav className="mb-6 grid grid-cols-3 gap-1 rounded-2xl border border-zinc-200 bg-white p-1 dark:border-zinc-800 dark:bg-zinc-900">
         {TABS.map((t, i) => {
           const active = t.key === tab;
           return (
@@ -95,7 +104,6 @@ export default function ProjectPage() {
         })}
       </nav>
 
-      {tab === "sources" && <SourcesTab project={p} setProject={setP} refresh={refresh} goto={goto} />}
       {tab === "script" && <ScriptTab project={p} setProject={setP} refresh={refresh} goto={goto} />}
       {tab === "rehearse" && <RehearseTab project={p} setProject={setP} refresh={refresh} goto={goto} />}
       {tab === "render" && <RenderTab project={p} setProject={setP} refresh={refresh} goto={goto} />}

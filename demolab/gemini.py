@@ -1,7 +1,8 @@
-"""Gemini REST calls: custom-voice TTS, JSON text generation, model listing.
+"""Gemini REST calls: TTS (custom or standard voices), model and voice listing.
 
 Custom voices belong to the AI Studio project that created them; the API key must come from that same
-project or the voice returns 404. The key is read from the keychain/env on each call and never logged.
+project or the voice returns 404. Each call takes the key to use (the caller resolves it from the voice
+profile); without one, the active profile's key is used. Keys are never logged.
 """
 from __future__ import annotations
 
@@ -10,6 +11,8 @@ import hashlib
 import io
 import json
 import pathlib
+import threading
+import time
 import wave
 
 import httpx
@@ -24,17 +27,13 @@ class GeminiError(RuntimeError):
     pass
 
 
-def _key() -> str:
-    k = config.get_secret("gemini_api_key")
-    if not k:
-        raise GeminiError("No Gemini API key set. Add one in Settings (it must come from the AI Studio "
-                          "project that owns the custom voice).")
-    return k
+def _key(key: str | None = None) -> str:
+    return key or config.resolve().key
 
 
-def _post(path: str, body: dict, timeout: float = 180) -> dict:
+def _post(path: str, body: dict, timeout: float = 180, key: str | None = None) -> dict:
     r = httpx.post(f"{API}/{path}", json=body, timeout=timeout,
-                   headers={"x-goog-api-key": _key(), "Content-Type": "application/json"})
+                   headers={"x-goog-api-key": _key(key), "Content-Type": "application/json"})
     if r.status_code >= 400:
         msg = r.text[:600]
         if r.status_code == 404 and "voice" in msg.lower():
@@ -49,21 +48,21 @@ def tts_cache_key(text: str, voice: str, style: str, model: str) -> str:
     return hashlib.sha1(json.dumps([text, voice, style, model]).encode()).hexdigest()[:16]
 
 
-def synth(text: str, out: pathlib.Path, voice: str, style: str, model: str) -> float:
-    """Write a 24 kHz mono 16-bit WAV of `text` in the custom voice; returns its duration in seconds."""
+def synth(text: str, out: pathlib.Path, voice: str, style: str, model: str, key: str | None = None) -> float:
+    """Write a 24 kHz mono 16-bit WAV of `text` in `voice`; returns its duration in seconds."""
     out.parent.mkdir(parents=True, exist_ok=True)
     if config.fake_gemini():
         secs = max(1.0, len(text.split()) / 2.6)   # ~156 wpm of silence
         _write_pcm(out, b"\0\0" * int(secs * SR))
         return secs
     if not voice:
-        raise GeminiError("No voice id set. Add your custom voice id in Settings.")
+        raise GeminiError("No voice chosen. Pick one on the setup page.")
     body = {
         "contents": [{"role": "user", "parts": [{"text": text, **({"speechMetadata": {"style": style}} if style else {})}]}],
         "generationConfig": {"responseModalities": ["AUDIO"],
                              "speechConfig": {"voiceConfig": {"voice": voice}}},
     }
-    d = _post(f"models/{model}:generateContent", body)
+    d = _post(f"models/{model}:generateContent", body, key=key)
     try:
         data = base64.b64decode(d["candidates"][0]["content"]["parts"][0]["inlineData"]["data"])
     except (KeyError, IndexError):
@@ -94,33 +93,60 @@ def wav_seconds(p: pathlib.Path) -> float:
 
 # ---- text ---------------------------------------------------------------------------------------
 
-def generate_json(prompt: str, schema: dict, model: str, images: list[bytes] | None = None,
-                  system: str = "") -> dict | list:
-    """Structured output: the response is parsed JSON matching `schema` (OpenAPI subset)."""
-    parts: list[dict] = [{"text": prompt}]
-    for img in images or []:
-        parts.append({"inlineData": {"mimeType": "image/jpeg", "data": base64.b64encode(img).decode()}})
-    body: dict = {
-        "contents": [{"role": "user", "parts": parts}],
-        "generationConfig": {"responseMimeType": "application/json", "responseSchema": schema,
-                             "temperature": 0.4},
-    }
-    if system:
-        body["systemInstruction"] = {"parts": [{"text": system}]}
-    d = _post(f"models/{model}:generateContent", body, timeout=300)
-    try:
-        txt = "".join(p.get("text", "") for p in d["candidates"][0]["content"]["parts"])
-        return json.loads(txt)
-    except (KeyError, IndexError, json.JSONDecodeError) as e:
-        raise GeminiError(f"Unexpected response from {model}: {e}: {json.dumps(d)[:300]}")
-
-
-def list_models() -> list[dict]:
+def list_models(key: str | None = None) -> list[dict]:
     if config.fake_gemini():
         return [{"name": "gemini-flash-latest", "methods": ["generateContent"]},
                 {"name": "gemini-3.8-flash-tts", "methods": ["generateContent"]}]
-    r = httpx.get(f"{API}/models", params={"pageSize": 200}, headers={"x-goog-api-key": _key()}, timeout=30)
+    r = httpx.get(f"{API}/models", params={"pageSize": 200}, headers={"x-goog-api-key": _key(key)}, timeout=30)
     if r.status_code >= 400:
         raise GeminiError(f"Gemini HTTP {r.status_code}: {r.text[:300]}")
     return [{"name": m["name"].removeprefix("models/"), "display": m.get("displayName", ""),
              "methods": m.get("supportedGenerationMethods", [])} for m in r.json().get("models", [])]
+
+
+# ---- voices -------------------------------------------------------------------------------------
+
+_voices: dict[str, tuple[float, list[dict]]] = {}
+_voices_lock = threading.Lock()
+VOICE_TTL = 600
+
+FAKE_VOICES = [
+    {"id": "voice_test0001", "display_name": "Test custom voice", "type": "replicated"},
+    {"id": "kore", "display_name": "Kore", "type": "prebuilt"},
+    {"id": "puck", "display_name": "Puck", "type": "prebuilt"},
+    {"id": "en-us-podcaster-1", "display_name": "Podcaster 1", "type": "prebuilt"},
+    {"id": "en-gb-storyteller-2", "display_name": "Storyteller 2", "type": "prebuilt"},
+]
+
+
+def list_voices(key: str) -> list[dict]:
+    """Every voice the key can use: its project's custom voices and the standard ones, as
+    {id, name, kind: custom|standard, locale}. Also proves the key works. Cached for ten minutes."""
+    if config.fake_gemini():
+        raw = FAKE_VOICES
+    else:
+        h = hashlib.sha256(key.encode()).hexdigest()
+        with _voices_lock:
+            hit = _voices.get(h)
+        if hit and time.time() - hit[0] < VOICE_TTL:
+            return hit[1]
+        raw, token = [], None
+        for _ in range(20):
+            r = httpx.get(f"{API}/voices", headers={"x-goog-api-key": key}, timeout=30,
+                          params={"pageSize": 1000, **({"pageToken": token} if token else {})})
+            if r.status_code in (400, 401, 403):
+                raise GeminiError("Gemini rejected this API key. Check that it is complete and active.")
+            if r.status_code >= 400:
+                raise GeminiError(f"Gemini HTTP {r.status_code}: {r.text[:300]}")
+            d = r.json()
+            raw += d.get("voices", [])
+            token = d.get("next_page_token") or d.get("nextPageToken")
+            if not token:
+                break
+    out = [{"id": v["id"], "name": v.get("display_name") or v["id"],
+            "kind": "standard" if v.get("type") == "prebuilt" else "custom",
+            "locale": "-".join(v["id"].split("-")[:2]) if v["id"].count("-") >= 2 else ""} for v in raw]
+    if not config.fake_gemini():
+        with _voices_lock:
+            _voices[h] = (time.time(), out)
+    return out

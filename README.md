@@ -1,22 +1,23 @@
 # Voice Demo Lab
 
-Narrated demo videos of web apps and slide decks in **your own custom Gemini TTS voice**.
+Narrated demo videos of what your coding session worked on, in **your own custom Gemini TTS voice** or
+any standard Gemini voice, made from inside **Claude Code** or **Google Antigravity**.
 
-1. **Sources**: point it at a live web app, a source folder, a PowerPoint/PDF, a Google Slides deck, or
-   paste notes or an existing script. When you ask from a coding session ("make a demo of what we just
-   built"), the agent adds **session context**: a brief of the goal, what was built and why, what to show
-   and what to avoid, plus the key files and screenshots. The script is built around it.
-2. **Script**: Gemini drafts the narration (title cards, slide narration, web steps). You edit it, hear
-   any line in your voice, ask AI to revise a segment, and approve.
-3. **Rehearse** (web apps): Gemini explores the app and plans the clicks for each step against the real
-   page; you edit them; a dry run checks every action.
-4. **Render**: narration (cached), title cards, slides and a real-time screencast of the web steps are
-   composed into a 1080p MP4. Long waits are fast-forwarded behind a banner, and silences are tightened
-   to a presenter's pace.
+Analyze some code, a running app or a slide deck with your agent, then ask it for a demo video:
 
-It runs locally as a web app plus an MCP server, packaged as a plugin for **Claude Code** and
-**Google Antigravity**. Both talk to the same local service, so you can drive it from an agent and
-review in the browser.
+1. **The session writes the script.** The agent that did the analysis writes the narration itself,
+   following the plugin's guide (format, house style, writing for the ear). The plugin checks it. Decks
+   the session used become the video's slides; a running app is recorded live, with click steps the agent
+   writes from the code and checks against the real page.
+2. **You review it beside the chat.** The studio opens in the session's side panel: edit any line, hear it
+   in the voice, and approve. Or ask the agent for changes in the chat.
+3. **Gemini voices it and the video is rendered**, only after you approve. Narration (cached), title
+   cards, slides and a real-time screencast of the web steps are composed into a 1080p MP4. Long waits are
+   fast-forwarded behind a banner, and silences are tightened to a presenter's pace.
+
+Gemini is used only for text-to-speech; it never writes the script.
+
+It runs locally as a small web app (the studio) plus an MCP server, packaged as a plugin for both hosts.
 
 ## Requirements
 
@@ -58,31 +59,39 @@ Or install from a local clone with `agy plugin install ~/path/to/custom-voice-de
 
 ## First run
 
-Open the web app (ask the agent to "open Voice Demo Lab", or run `scripts/launch.sh open`) and go to
-**Settings**:
+The first time the plugin is used (or whenever no voice is set up), the agent opens the **setup page**
+beside the chat, in the host's built-in browser, or in your system browser:
 
-- **Custom voice id**: e.g. `voice_…` from aistudio.google.com
-- **Gemini API key**: stored in the macOS Keychain (`demolab` service). It is never shown again, never
-  sent to the browser, and never accepted through MCP tools. `$GEMINI_API_KEY` overrides it.
-- **Render folder**: point it at an external drive for long demos. If that drive is not mounted, renders
-  stop with an error instead of falling back to the internal disk.
+1. **Add a Gemini API key.** It is sent only to the local service, checked with Gemini, and stored in your
+   system keychain (`demolab` service). It is never shown again, never returned by the API, and never
+   accepted through MCP tools or the chat. `$GEMINI_API_KEY` overrides saved keys when set.
+2. **Choose a voice.** The page lists the custom voices in that key's AI Studio project, plus the standard
+   Gemini voices: 30 multilingual ones and about 2,000 more in 40 languages, by role (podcaster,
+   storyteller, training voiceover, …). Play a sample of any of them.
+3. **Name it and set the delivery style.** This saves a **voice profile** and makes it active for this and
+   future sessions.
+
+You can save several keys and several voice profiles, switch the active one from the sidebar or Settings,
+or give a project its own voice (**Brief & voice**). Agents switch with `use_voice_profile`. In Settings
+you can also set the render folder: if it is on an external drive that is not mounted, renders stop with an
+error instead of falling back to the internal disk.
 
 ## Using it from an agent
 
-The plugin adds the `voice-demo` skill and the `demolab` MCP server. Try:
+The plugin adds the `voice-demo` skill and the `demolab` MCP server. In a session where you have been
+working on something, try:
 
-- "Make a narrated demo of the app on localhost:8090 showing how to create and test a policy"
-- "Turn ~/Desktop/pitch.pptx into a narrated video in my voice"
-- "Open the Voice Demo Lab on the retail project"
+- "Create a demo video of the policy editor we just reviewed, running on localhost:8090"
+- "Make a narrated video of the deck we went through, in the formal voice"
+- "Switch the narrator to Kore for this demo"
 
-The agent drafts and revises, then hands you the studio link to review. It approves the script only
-when you say so.
+The agent writes the script, opens it beside the chat, and renders only after you approve it.
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `demolab/` | Python service: FastAPI app (`api.py`), MCP server (`mcp_server.py`), Gemini (`gemini.py`), sources, script writer, browser automation and recorder (`browser.py`), composer (`compose.py`) |
+| `demolab/` | Python service: FastAPI app (`api.py`), MCP server (`mcp_server.py`), Gemini TTS (`gemini.py`), decks (`sources.py`), the script guide and checks (`script.py`), browser automation and recorder (`browser.py`), composer (`compose.py`) |
 | `demolab/static/` | Built web app (committed so plugin installs need no Node) |
 | `web/` | React + Vite + Tailwind source: `npm install && npm run build` writes to `demolab/static/` |
 | `skills/voice-demo/` | Agent skill shared by both hosts |
@@ -91,7 +100,7 @@ when you say so.
 | `scripts/launch.sh` | Plugin entry point (`mcp`, `serve`, `open`, `setup`) |
 
 The service uses port 8765 (`$DEMOLAB_PORT`); if another program holds it, it picks a free port and records
-it in `~/.demolab/port`. Data lives in `~/.demolab/` (override with `$DEMOLAB_HOME`). Each project's sources, slides, narration
+it in `~/.demolab/port`. Data lives in `~/.demolab/` (override with `$DEMOLAB_HOME`). Each project's slides, narration
 cache and dry-run screenshots live in `projects/<id>/`.
 
 ## Development

@@ -79,6 +79,12 @@ def ensure_server(timeout: float = 30) -> str:
     raise RuntimeError(f"The Voice Demo Lab service did not start; see {config.HOME / 'server.log'}")
 
 
+class ApiError(RuntimeError):
+    def __init__(self, method: str, path: str, status: int, detail):
+        self.status, self.detail = status, detail
+        super().__init__(f"{method} {path} -> {status}: {detail}")
+
+
 def call(method: str, path: str, **kw):
     ensure_server()
     r = httpx.request(method, f"{BASE}{path}", timeout=kw.pop("timeout", 600), **kw)
@@ -87,7 +93,7 @@ def call(method: str, path: str, **kw):
             detail = r.json().get("detail")
         except Exception:
             detail = r.text[:400]
-        raise RuntimeError(f"{method} {path} -> {r.status_code}: {detail}")
+        raise ApiError(method, path, r.status_code, detail)
     return r.json() if "json" in r.headers.get("content-type", "") else r.content
 
 

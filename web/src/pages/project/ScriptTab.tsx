@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, CheckCircle2, Circle, LayoutTemplate, MousePointerClick, PenLine, Plus, Presentation, Sparkles, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, CheckCircle2, Circle, LayoutTemplate, MousePointerClick, PenLine, Plus, Presentation, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, newSegment, slideUrl, speakSeconds, type Project, type Segment, type SegType } from "../../api";
 import { VoiceButton } from "../../components/hooks";
@@ -29,7 +29,7 @@ export default function ScriptTab({ project: p, setProject, goto }: TabProps) {
     if (saved && Object.entries(b).every(([k, v]) => JSON.stringify(saved[k]) === JSON.stringify(v))) return;
     return guard(() => api.patchSegment(p.id, sid, b));
   };
-  const putAll = (next: Segment[]) => { setSegs(next); return guard(() => api.putSegments(p.id, next)); };
+  const putAll = (next: Segment[]) => { setSegs(next); return guard(async () => (await api.putSegments(p.id, next)).project); };
   const move = (i: number, d: number) => {
     const n = [...segs];
     [n[i], n[i + d]] = [n[i + d], n[i]];
@@ -44,11 +44,9 @@ export default function ScriptTab({ project: p, setProject, goto }: TabProps) {
   if (!segs.length) {
     return (
       <Empty icon={<PenLine className="size-6" />} title="No script yet">
-        Add sources and let Gemini draft one, or start from scratch.
-        <div className="mt-4 flex justify-center gap-2">
-          <Button variant="primary" onClick={() => goto("sources")}>Go to sources</Button>
-          <Button onClick={() => insert(-1, "card")}>Start blank</Button>
-        </div>
+        Your coding agent writes the script from what the session analyzed. It will appear here for you to review,
+        edit and approve. You can also start one by hand.
+        <div className="mt-4 flex justify-center"><Button onClick={() => insert(-1, "card")}>Start blank</Button></div>
       </Empty>
     );
   }
@@ -85,21 +83,18 @@ export default function ScriptTab({ project: p, setProject, goto }: TabProps) {
           onMove={(d) => move(i, d)}
           onDelete={() => confirm("Delete this segment?") && putAll(segs.filter((x) => x.id !== s.id))}
           onInsert={(t) => insert(i, t)}
-          onRevise={(instruction) => guard(() => api.revise(p.id, s.id, instruction))}
         />
       ))}
     </div>
   );
 }
 
-function SegmentCard({ p, s, i, last, onLocal, onSave, onMove, onDelete, onInsert, onRevise }: {
+function SegmentCard({ p, s, i, last, onLocal, onSave, onMove, onDelete, onInsert }: {
   p: Project; s: Segment; i: number; last: boolean;
   onLocal: (b: Partial<Segment>) => void; onSave: (b: Partial<Segment>) => void;
-  onMove: (d: number) => void; onDelete: () => void; onInsert: (t: SegType) => void; onRevise: (x: string) => Promise<void>;
+  onMove: (d: number) => void; onDelete: () => void; onInsert: (t: SegType) => void;
 }) {
   const meta = TYPE_META[s.type];
-  const [revising, setRevising] = useState(false);
-  const [instr, setInstr] = useState("");
   const [adding, setAdding] = useState(false);
 
   // Text fields edit locally and save on blur; selects save immediately.
@@ -185,17 +180,8 @@ function SegmentCard({ p, s, i, last, onLocal, onSave, onMove, onDelete, onInser
             )}
             <div className="flex flex-wrap items-center gap-1">
               <VoiceButton text={[s.narration, s.after_narration].filter(Boolean).join(" ")} projectId={p.id} />
-              <button onClick={() => setRevising(!revising)} className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-violet-700 hover:bg-violet-50 dark:text-violet-300 dark:hover:bg-violet-900/30">
-                <Sparkles className="size-3.5" />Revise with AI
-              </button>
+              <span className="text-xs text-zinc-400">To rewrite it, ask your coding agent in the chat.</span>
             </div>
-            {revising && (
-              <div className="flex gap-2">
-                <input className="input" autoFocus value={instr} onChange={(e) => setInstr(e.target.value)} placeholder="Shorter; explain what a policy is first; friendlier…"
-                  onKeyDown={async (e) => { if (e.key === "Enter" && instr.trim()) { await onRevise(instr); setInstr(""); setRevising(false); } }} />
-                <Button size="md" variant="primary" disabled={!instr.trim()} onClick={async () => { await onRevise(instr); setInstr(""); setRevising(false); }}>Revise</Button>
-              </div>
-            )}
           </div>
         </div>
       </div>

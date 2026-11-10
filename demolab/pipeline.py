@@ -12,26 +12,32 @@ from .compose import Recorded, Still, compose
 from .models import Project, Render
 
 
-def voice_for(p: Project | None = None) -> tuple[str, str, str]:
-    st = config.load()
-    return ((p and p.voice_id) or st.voice_id, (p and p.voice_style) or st.voice_style, st.tts_model)
+def voice_for(p: Project | None = None, profile_id: str = "") -> tuple[str, str, str, str]:
+    """(voice, style, tts model, key) for a project: its profile (else the active one), then its overrides."""
+    v = config.resolve(profile_id or (p.profile_id if p else ""))
+    return ((p and p.voice_id) or v.voice, (p and p.voice_style) or v.style, config.load().tts_model, v.key)
 
 
 def narrate(p: Project, text: str) -> tuple[pathlib.Path, float]:
-    voice, style, model = voice_for(p)
+    voice, style, model, key = voice_for(p)
     wav = store.sub(p.id, "audio") / f"{gemini.tts_cache_key(text, voice, style, model)}.wav"
     if wav.exists():
         return wav, gemini.wav_seconds(wav)
-    return wav, gemini.synth(text, wav, voice, style, model)
+    return wav, gemini.synth(text, wav, voice, style, model, key=key)
 
 
-def preview(text: str, pid: str | None = None) -> pathlib.Path:
-    p = store.get(pid) if pid else None
-    voice, style, model = voice_for(p)
-    d = config.HOME / "previews"
-    wav = d / f"{gemini.tts_cache_key(text, voice, style, model)}.wav"
+def preview(text: str, pid: str | None = None, profile_id: str = "", key_id: str = "", voice: str = "",
+            style: str | None = None) -> pathlib.Path:
+    """Speak text in a project's voice, a profile, or (while choosing) any voice with a saved key."""
+    if key_id and voice:
+        key, model = config.key_value(key_id), config.load().tts_model
+        style = config.DEFAULT_STYLE if style is None else style
+    else:
+        voice, style0, model, key = voice_for(store.get(pid) if pid else None, profile_id)
+        style = style0 if style is None else style
+    wav = config.HOME / "previews" / f"{gemini.tts_cache_key(text, voice, style, model)}.wav"
     if not wav.exists():
-        gemini.synth(text, wav, voice, style, model)
+        gemini.synth(text, wav, voice, style, model, key=key)
     return wav
 
 

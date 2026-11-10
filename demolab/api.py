@@ -5,19 +5,20 @@ import pathlib
 import subprocess
 import sys
 import threading
+from urllib.parse import urljoin
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import browser, config, gemini, google_auth, jobs, pipeline, scriptgen, sources, store
+from . import browser, config, gemini, google_auth, jobs, pipeline, script, sources, store
 from .models import Project, Segment
 
 STATIC = pathlib.Path(__file__).parent / "static"
 ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
 
-app = FastAPI(title="Voice Demo Lab", version="0.1.0")
+app = FastAPI(title="Voice Demo Lab", version="0.3.0")
 
 
 @app.middleware("http")
@@ -25,6 +26,12 @@ async def local_only(request: Request, call_next):
     host = (request.headers.get("host") or "").rsplit(":", 1)[0]
     if host not in ALLOWED_HOSTS:
         return JSONResponse({"detail": "forbidden host"}, status_code=403)
+    # Writes only from this app's own pages (or non-browser clients, which send no Origin): another site
+    # open in the browser cannot post a key or change settings through the local service.
+    origin = request.headers.get("origin")
+    if request.method not in ("GET", "HEAD", "OPTIONS") and origin and \
+            origin.split("://", 1)[-1].rsplit(":", 1)[0] not in ALLOWED_HOSTS:
+        return JSONResponse({"detail": "forbidden origin"}, status_code=403)
     return await call_next(request)
 
 
@@ -36,6 +43,17 @@ async def not_found(_, e: KeyError):
 @app.exception_handler(ValueError)
 async def bad_request(_, e: ValueError):
     return JSONResponse({"detail": str(e)}, status_code=400)
+
+
+@app.exception_handler(config.SetupNeeded)
+async def setup_needed(request: Request, e: config.SetupNeeded):
+    url = f"{str(request.base_url).rstrip('/')}/setup"
+    return JSONResponse({"detail": f"{e} Open {url}", "setup_url": url}, status_code=428)
+
+
+@app.exception_handler(StopIteration)
+async def missing(_, e: StopIteration):
+    return JSONResponse({"detail": "not found"}, status_code=404)
 
 
 @app.exception_handler(gemini.GeminiError)
@@ -55,45 +73,144 @@ def get_settings():
     return config.public_settings()
 
 
+class SettingsIn(BaseModel):
+    tts_model: str | None = None
+    output_dir: str | None = None
+    google_client_secret: str | None = None
+    audience: str | None = None
+
+
 @app.put("/api/settings")
-def put_settings(s: config.Settings):
-    config.save(s)
+def put_settings(b: SettingsIn):
+    config.update(**b.model_dump(exclude_none=True))
     return config.public_settings()
 
 
+# ---- API keys, voices and voice profiles ---------------------------------------------------------
+# Keys arrive only here, from the local web app, and go straight to the keychain. Nothing returns them.
+
 class KeyIn(BaseModel):
+    name: str = ""
     key: str
 
 
-@app.put("/api/settings/gemini-key")
-def set_key(k: KeyIn):
-    if len(k.key.strip()) < 20:
+@app.post("/api/keys")
+def add_key(k: KeyIn):
+    value = k.key.strip()
+    if len(value) < 20 or any(c.isspace() for c in value):
         raise ValueError("That does not look like a Gemini API key.")
-    config.set_secret("gemini_api_key", k.key.strip())
+    voices = gemini.list_voices(value)      # proves the key works before it is saved
+    key = config.add_key(k.name, value)
+    return {"key": key, "custom_voices": sum(v["kind"] == "custom" for v in voices),
+            "settings": config.public_settings()}
+
+
+@app.delete("/api/keys/{kid}")
+def delete_key(kid: str):
+    config.delete_key(kid)
     return config.public_settings()
 
 
-@app.delete("/api/settings/gemini-key")
-def del_key():
-    config.delete_secret("gemini_api_key")
+@app.get("/api/keys/{kid}/voices")
+def key_voices(kid: str, locale: str = "", q: str = "", limit: int = 400):
+    """Custom voices in full, the standard voices filtered by locale ("" = multilingual) and search."""
+    config.load().key(kid)
+    voices = gemini.list_voices(config.key_value(kid))
+    locales: dict[str, int] = {}
+    for v in voices:
+        if v["kind"] == "standard" and v["locale"]:
+            locales[v["locale"]] = locales.get(v["locale"], 0) + 1
+    ql = q.lower().strip()
+    std = [v for v in voices if v["kind"] == "standard" and (v["locale"] == locale or locale == "*")
+           and (not ql or ql in v["name"].lower() or ql in v["id"])]
+    return {"custom": [v for v in voices if v["kind"] == "custom"],
+            "standard": std[:limit], "standard_total": len(std),
+            "multilingual": sum(v["kind"] == "standard" and not v["locale"] for v in voices),
+            "locales": sorted(({"code": c, "count": n} for c, n in locales.items()), key=lambda x: x["code"])}
+
+
+class ProfileIn(BaseModel):
+    name: str
+    description: str = ""
+    key_id: str
+    voice: str
+    voice_name: str = ""
+    kind: str = "custom"
+    style: str = config.DEFAULT_STYLE
+    activate: bool = True
+
+
+@app.post("/api/profiles")
+def add_profile(b: ProfileIn):
+    def add(s: config.Settings):
+        s.key(b.key_id)
+        v = config.VoiceProfile(**b.model_dump(exclude={"activate"}))
+        s.profiles.append(v)
+        if b.activate or not s.active_profile:
+            s.active_profile = v.id
+    config.mutate(add)
+    return config.public_settings()
+
+
+class ProfilePatch(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    key_id: str | None = None
+    voice: str | None = None
+    voice_name: str | None = None
+    kind: str | None = None
+    style: str | None = None
+
+
+@app.patch("/api/profiles/{vid}")
+def patch_profile(vid: str, b: ProfilePatch):
+    def patch(s: config.Settings):
+        v = s.profile(vid)
+        changes = b.model_dump(exclude_none=True)
+        if "key_id" in changes:
+            s.key(changes["key_id"])
+        s.profiles[s.profiles.index(v)] = v.model_copy(update=changes)
+    config.mutate(patch)
+    return config.public_settings()
+
+
+@app.delete("/api/profiles/{vid}")
+def delete_profile(vid: str):
+    def drop(s: config.Settings):
+        s.profile(vid)
+        s.profiles = [v for v in s.profiles if v.id != vid]
+        if s.active_profile == vid:
+            s.active_profile = s.profiles[0].id if s.profiles else ""
+    config.mutate(drop)
+    return config.public_settings()
+
+
+@app.post("/api/profiles/{vid}/activate")
+def activate_profile(vid: str):
+    config.mutate(lambda s: (s.profile(vid), setattr(s, "active_profile", vid)))
     return config.public_settings()
 
 
 @app.get("/api/models")
 def models():
-    return gemini.list_models()
+    return [] if config.setup_needed() else gemini.list_models()
 
 
 class PreviewIn(BaseModel):
     text: str
     project_id: str | None = None
+    profile_id: str = ""
+    key_id: str = ""             # with voice: try any voice the key can use, before saving a profile
+    voice: str = ""
+    style: str | None = None
 
 
 @app.post("/api/voice/preview")
 def voice_preview(v: PreviewIn):
     if not v.text.strip():
         raise ValueError("Nothing to say.")
-    return FileResponse(pipeline.preview(v.text.strip()[:2000], v.project_id), media_type="audio/wav")
+    return FileResponse(pipeline.preview(v.text.strip()[:2000], v.project_id, v.profile_id, v.key_id, v.voice,
+                                         v.style), media_type="audio/wav")
 
 
 _google = {"state": "idle", "error": ""}
@@ -130,7 +247,10 @@ class ProjectIn(BaseModel):
     name: str
     base_url: str = ""
     goal: str = ""
+    brief: str = ""
+    audience: str = ""
     instructions: str = ""
+    profile_id: str = ""
 
 
 @app.get("/api/projects")
@@ -154,7 +274,10 @@ class ProjectPatch(BaseModel):
     name: str | None = None
     base_url: str | None = None
     goal: str | None = None
+    brief: str | None = None
+    audience: str | None = None
     instructions: str | None = None
+    profile_id: str | None = None
     voice_id: str | None = None
     voice_style: str | None = None
 
@@ -171,62 +294,18 @@ def delete_project(pid: str):
     return {"deleted": pid}
 
 
-# ---- sources ------------------------------------------------------------------------------------
+# ---- decks --------------------------------------------------------------------------------------
 
-class SourceIn(BaseModel):
-    kind: str            # url | repo | gslides | text | session
-    ref: str = ""        # session: the workspace folder relative file paths resolve against
-    text: str = ""       # text: the notes; session: the brief
+class DeckIn(BaseModel):
+    ref: str             # a .pptx / .pdf path, or a Google Slides URL or id
     label: str = ""
-    files: list[str] = []   # session: files and folders to attach
 
 
-def _add(pid: str, fn) -> Project:
+@app.post("/api/projects/{pid}/decks")
+def add_deck(pid: str, b: DeckIn):
     p = store.get(pid)
-    src = fn(p)            # may append slides to p
-    p.sources.append(src)
+    p.sources.append(sources.add_deck(p, b.ref, b.label))   # appends its slides to p.slides
     return store.save(p)
-
-
-@app.post("/api/projects/{pid}/sources")
-def add_source(pid: str, b: SourceIn):
-    add = {"url": lambda p: sources.add_url(p, b.ref, b.label),
-           "repo": lambda p: sources.add_repo(p, b.ref, b.label),
-           "gslides": lambda p: sources.add_gslides(p, b.ref, b.label),
-           "text": lambda p: sources.add_text(p, b.label, b.text),
-           "session": lambda p: sources.add_session(p, b.text, b.files, b.label, b.ref)}.get(b.kind)
-    if not add:
-        raise ValueError(f"Unknown source kind {b.kind}")
-    return _add(pid, add)
-
-
-@app.post("/api/projects/{pid}/sources/upload")
-async def upload_source(pid: str, file: UploadFile = File(...), label: str = Form("")):
-    data = await file.read()
-    return _add(pid, lambda p: sources.add_upload(p, file.filename or "upload", data, label))
-
-
-@app.delete("/api/projects/{pid}/sources/{sid}")
-def delete_source(pid: str, sid: str):
-    def drop(p: Project):
-        src = next(s for s in p.sources if s.id == sid)
-        lo, n = src.slide_offset, src.slide_count
-        for name in p.slides[lo:lo + n]:
-            (store.pdir(pid) / "slides" / name).unlink(missing_ok=True)
-        del p.slides[lo:lo + n]
-        p.sources.remove(src)
-        for name in src.images:
-            (store.pdir(pid) / "session" / name).unlink(missing_ok=True)
-        for s in p.sources:
-            if s.slide_offset >= lo + n and n:
-                s.slide_offset -= n
-        for seg in p.segments:   # keep slide segments pointing at the same images
-            if seg.slide is not None and n:
-                if lo <= seg.slide < lo + n:
-                    seg.type, seg.slide = "card", None
-                elif seg.slide >= lo + n:
-                    seg.slide -= n
-    return store.mutate(pid, drop)
 
 
 @app.get("/api/projects/{pid}/slides/{n}")
@@ -237,17 +316,18 @@ def slide_image(pid: str, n: int):
 
 # ---- script -------------------------------------------------------------------------------------
 
-@app.post("/api/projects/{pid}/script/draft")
-def draft_script(pid: str):
-    store.get(pid)
-    return jobs.start(pid, "draft", scriptgen.draft, pid).public()
-
-
 @app.put("/api/projects/{pid}/segments")
-def put_segments(pid: str, segs: list[Segment]):
-    def apply(p: Project):
-        p.segments, p.script_approved = segs, False
-    return store.mutate(pid, apply)
+def put_segments(pid: str, segs: list[dict] = Body(...)):
+    """Replace the script (from the session's model, or the studio's editor). Checked first: errors reject it."""
+    p = store.get(pid)
+    parsed, errors, warnings = script.validate(segs, p)
+    if errors:
+        raise HTTPException(400, {"errors": errors, "warnings": warnings})
+
+    def apply(q: Project):
+        q.segments, q.script_approved = parsed, False
+    q = store.mutate(pid, apply)
+    return {"project": q, "warnings": warnings, "seconds": script.seconds(parsed)}
 
 
 @app.patch("/api/projects/{pid}/segments/{sid}")
@@ -263,16 +343,6 @@ def patch_segment(pid: str, sid: str, changes: dict = Body(...)):
         elif not p.segments[i].approved:
             p.script_approved = False
     return store.mutate(pid, apply)
-
-
-class ReviseIn(BaseModel):
-    instruction: str
-
-
-@app.post("/api/projects/{pid}/segments/{sid}/revise")
-def revise_segment(pid: str, sid: str, b: ReviseIn):
-    scriptgen.revise_segment(pid, sid, b.instruction)
-    return store.get(pid)
 
 
 class ApproveIn(BaseModel):
@@ -292,14 +362,19 @@ def approve(pid: str, b: ApproveIn):
 
 # ---- browser ------------------------------------------------------------------------------------
 
-class ExploreIn(BaseModel):
-    segment_ids: list[str] | None = None
+class InspectIn(BaseModel):
+    url: str = ""        # empty = the project's base_url; a path is resolved against it
 
 
-@app.post("/api/projects/{pid}/explore")
-def explore(pid: str, b: ExploreIn = Body(default=ExploreIn())):
-    store.get(pid)
-    return jobs.start(pid, "explore", browser.explore, pid, b.segment_ids).public()
+@app.post("/api/projects/{pid}/inspect")
+def inspect(pid: str, b: InspectIn):
+    """The page as the recorder sees it (saved login included): title, visible text, controls with selectors."""
+    p = store.get(pid)
+    url = urljoin(p.base_url or "", b.url) if b.url else p.base_url
+    if not url.startswith(("http://", "https://")):
+        raise ValueError("Give a full URL, or set the project's base_url so a path can be resolved against it.")
+    snap = browser.snapshot_url(p, url)
+    return {"url": url, "title": snap["title"], "text": snap["text"][:6000], "elements": snap["elements"]}
 
 
 @app.post("/api/projects/{pid}/dryrun")

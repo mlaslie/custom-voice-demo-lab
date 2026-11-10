@@ -17,8 +17,8 @@ export default function RenderTab({ project: p, refresh, goto }: TabProps) {
 
   const steps = p.segments.filter((x) => x.type === "step");
   const checks = [
-    { ok: !!(s?.voice_id && (s.gemini_key_set || s.fake_gemini)), label: "Voice id and API key set", fix: <Link className="underline" to="/settings">Settings</Link> },
-    { ok: p.segments.length > 0, label: "Script drafted", fix: <button className="underline" onClick={() => goto("sources")}>Sources</button> },
+    { ok: !!s && !s.setup_needed, label: `Narrator voice: ${s?.profiles.find((v) => v.id === p.profile_id)?.name ?? s?.active?.name ?? "none"}`, fix: <Link className="underline" to="/setup">Setup</Link> },
+    { ok: p.segments.length > 0, label: "Script written", fix: <button className="underline" onClick={() => goto("script")}>Script</button> },
     { ok: p.script_approved, label: "Script approved", fix: <button className="underline" onClick={() => goto("script")}>Script</button> },
     ...(steps.length ? [
       { ok: steps.every((x) => x.actions.length > 0), label: "Every web step has actions", fix: <button className="underline" onClick={() => goto("rehearse")}>Rehearse</button> },

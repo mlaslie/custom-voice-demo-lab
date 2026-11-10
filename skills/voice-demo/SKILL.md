@@ -1,78 +1,73 @@
 ---
 name: voice-demo
 description: >-
-  Make a narrated demo video of a web app or a slide deck in the user's custom Gemini TTS voice, using the
-  Voice Demo Lab MCP tools. Use when the user asks for a demo video, a narrated walkthrough, a voice-over
-  for slides or an app, to turn a deck/notes/code into a narrated video, or to open or configure Voice
-  Demo Lab (voice id, API key, Google Slides). Also use it to turn the current working session (what was
-  just built, changed or discussed) into a narrated demo.
+  Turn what this coding session analyzed (code, a running app, slides, notes) into a narrated demo video in
+  the user's custom or a standard Gemini TTS voice, using the Voice Demo Lab MCP tools. You write the script
+  from the session; the plugin checks it, the user approves it in a side panel, then it is voiced and
+  rendered. Use when the user asks for a demo video, a narrated walkthrough or a voice-over of what the
+  session worked on, or to set up or switch narrator voices (API keys, custom and standard voices).
 ---
 
 # Voice Demo Lab
 
-Voice Demo Lab is a local web app plus an MCP server (`demolab`). Its tools and the web app share the same
-projects, so you can work through the tools while the user reviews in the browser.
+The session is the context. You have analyzed code, slides or an app with the user; when they ask for a
+demo video, **you write the narration script** from that knowledge, following the plugin's guide. The
+plugin checks it, shows it in the studio beside the chat for the user to review and approve, then Gemini
+text-to-speech voices it and the video is rendered. Gemini does not write the script.
 
 ## Flow
 
-1. **Check setup**: `get_settings`. If `voice_id` is empty or `gemini_key_set` is false, call
-   `open_studio` and ask the user to fill in Settings. **Never ask for, accept, echo or store the API key
-   yourself.** The key must come from the AI Studio project that created the custom voice (a key from another
-   project makes the voice return 404).
-2. **Create the project**: `create_project(name, base_url, goal, instructions)`. `base_url` is the web
-   app to demo (leave it empty for slides-only). Put the user's wishes for tone, length and emphasis in
-   `instructions`.
-   **Then open the studio in a side panel right away**, so the user watches the project fill in beside the
-   chat: call `open_studio(project_id, open_browser=false)` and open the returned URL in your host's
-   built-in browser pane. In the Claude desktop app, use the built-in browser (`preview_start` with `url`
-   set to the studio's address, then `navigate` to the project URL if it has a path). In Antigravity, use
-   its browser. Only when the host has no such pane, call `open_studio(project_id)` to use the system
-   browser. Keep that pane on the project and reload it after big changes (a new draft, a render).
-3. **Add session context first** when the demo is about work done or discussed in this conversation
-   ("make a demo of this", "record what we just built"). Call `add_session_context` with what you know:
-   the goal, what was built or changed, decisions and why, what to show and in what order, and caveats
-   (unfinished or broken parts that must not be shown or claimed). Pass the files and folders that matter
-   most: specs, docs, key source files, screenshots you took, decks. Pass `workspace` so relative paths
-   resolve. The script writer treats this as the main story, so make it accurate and specific, and
-   never attach secrets (`.env`, keys, tokens). Skip this step only when the request has nothing to do
-   with the session.
-4. **Add other sources** with `add_source`:
-   - `url`: the live app
-   - `repo`: a local code folder
-   - `file`: a local .pptx/.pdf/.md/.txt
-   - `gslides`: needs Google connected in Settings
-   - `text`: notes or an existing script
+1. **Check setup**: `get_settings`. If `setup_needed` is true (first use, or no voice yet), call
+   `open_studio(page="setup", open_browser=false)` and open the returned URL in your side panel (below).
+   Ask the user to add their Gemini API key and choose a voice there, and wait until they say they are
+   done. **Never ask for, accept, echo or store an API key yourself**, even if the user pastes one into the
+   chat: the key is only entered on the setup page, which saves it to the OS keychain.
 
-   Slides from decks are numbered project-wide from 0.
-5. **Script**: `draft_script` has Gemini write it. If the user wants you to write it, or the draft needs
-   heavy rework, use `set_segments`, `update_segment` or `revise_segment`. The segment types are:
-   - `card`: a title card (title, kicker, sub, bullets)
-   - `slide`: shows `slide` N while narrating
-   - `step`: a web step, where `narration` plays, the actions run during or after it, then `after_narration`
-     says how the result shows the step worked
-6. **Review**: summarise the script for the user (segment titles and narration) and point them to the
-   studio in the side panel (or give them the `studio_url`) so they can edit it and listen to previews.
-   **Only call `approve_script` when the user explicitly approves.**
-7. **Web steps**: if the app needs a login, call `capture_login`; the user signs in themselves in the
-   window that opens. Then run `plan_actions` (Gemini explores the app and plans clicks for each step)
-   and `dry_run`. Fix failures with `update_segment` (actions use Playwright selectors such as
-   `role=button[name="Save"]`, `text="Exact text"` or CSS), or with `plan_actions` for those segment ids,
-   until the dry run passes.
-8. **Render**: `render(project_id)` starts a background job and returns at once. Recording runs in real
-   time, so it can take a while; poll `get_job` now and then and report progress. The result is an MP4
-   path in the output folder from Settings.
+2. **Pick the voice**: the active voice profile is used by default. If the user names a voice or a kind of
+   voice ("the formal one", "use Kore"), match it with `list_voice_profiles` (each profile has a label and
+   a description) and pass it to `start_demo`, or call `use_voice_profile`. To add a voice that is not
+   saved, send them to `open_studio(page="settings", open_browser=false)`.
 
-## Narration style (the user's approved defaults)
+3. **Start the demo**: `start_demo(title, goal, brief, audience, instructions, base_url, decks)`.
+   - `brief`: what this session established, in your own words: what was analyzed or built, how it works,
+     what matters, decisions and why, what is unfinished or must not be shown. The user sees it beside the
+     script.
+   - `decks`: every slide deck the session used (.pptx or .pdf paths, Google Slides links). Their slides
+     become the video's slide images; the result lists each slide's text and speaker notes.
+   - `base_url`: the running app to record, if the video shows a live app (empty for slides only).
 
-- An intro card plus a spoken introduction of what will be shown, a card per section or scenario, and a
-  narrated recap card with bullets. No closing tagline.
-- For each step: explain in plain terms what it does, do it, then say how the result matches the goal.
-- The audience is new to the product: full coverage, but high level.
-- Long waits (cloud operations, tests) get `wait_for` with `ff: true` and a short `what`, so the video
-  fast-forwards them behind a banner.
+4. **Open the studio beside the chat** right away, at the returned `studio_url`. In the Claude desktop
+   app, use the built-in browser (`preview_start` with `url` set to the studio's origin, then `navigate`
+   to the full URL). In Antigravity, use its browser. With no such pane, `open_studio(project_id)` opens
+   the system browser.
+
+5. **Write the script**: read `script_guide` (format, house style, writing for the ear), then call
+   `write_script(project_id, segments)` with the whole script. Write from what the session actually
+   found: real feature names, real behaviour, real numbers. Do not invent anything. If `errors` comes
+   back, nothing was saved: fix and resend. Fix the `warnings` that matter.
+   - Slides: one `slide` segment per slide, in order, narrating what the slide and its notes mean.
+   - Live app: `step` segments with actions. Take selectors from the code you read, or from
+     `inspect_page`, which shows a page's controls with ready-made selectors.
+
+6. **Review**: summarise the script in chat (segment titles and a line of each narration, the estimated
+   length) and point the user to the side panel, where they can edit any line, hear it in the voice
+   (Preview) and approve. Apply changes they ask for in chat with `update_segment` or a new
+   `write_script`; call `get_project` first, as they may have edited it in the studio. **Only call
+   `approve_script` when the user explicitly approves in chat**; approving in the studio needs nothing
+   from you.
+
+7. **Web steps** (live app only): if it needs a login, `capture_login` (the user signs in themselves in
+   the window that opens). Then `dry_run`; for each failure, look at its screenshot, fix the action with
+   `update_segment` (use `inspect_page` for the right selector), and run it again until it passes.
+
+8. **Render** once the script is approved: `render(project_id)` starts a background job; poll `get_job`
+   now and then and report progress. Recording runs in real time. The result is an MP4 in the user's
+   render folder, also playable on the studio's Render tab; reload the side panel to show it.
 
 ## Notes
 
-- Text for the voice should be written for the ear: short sentences, no markdown, no URLs read aloud.
-- `preview_voice(text)` returns a WAV path, which is useful for checking pronunciation of product names.
-- Large renders: suggest an output folder on an external drive in Settings if the user has one.
+- The script is spoken by a text-to-speech voice: no markdown, no URLs, spell out symbols and letters
+  said one by one. `preview_voice(text)` returns a WAV for checking how a name is pronounced.
+- Long waits in a live app (deploys, tests) get `wait_for` with `ff: true` and a short `what`, so the
+  video fast-forwards them behind a banner.
+- If the user asks for "a demo" and it is unclear whether they mean a video, ask before starting one.
