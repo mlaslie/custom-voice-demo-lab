@@ -85,6 +85,7 @@ class Project(BaseModel):
     profile_id: str = ""       # voice profile for this project; empty = the active profile
     voice_id: str = ""         # overrides the profile's voice when set
     voice_style: str = ""      # overrides the profile's style when set
+    speed: float = 0           # overrides the profile's narration speed when set (0 = the profile's)
     sources: list[Source] = []
     segments: list[Segment] = []
     slides: list[str] = []     # file names under slides/

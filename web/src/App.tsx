@@ -1,4 +1,4 @@
-import { AudioLines, FolderKanban, Settings as SettingsIcon } from "lucide-react";
+import { AlertTriangle, AudioLines, CheckCircle2, FolderKanban, Settings as SettingsIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { api, type Settings } from "./api";
@@ -38,6 +38,9 @@ export default function App() {
               <div className="mb-1.5 flex items-center gap-1.5 font-medium">
                 <span className={`size-2 rounded-full ${ready ? "bg-emerald-500" : "bg-amber-500"}`} />
                 {ready ? "Narrator voice" : "Setup needed"}
+                {settings.active && (settings.active.verified_at
+                  ? <CheckCircle2 className="ml-auto size-3.5 text-emerald-500" aria-label="Verified" />
+                  : <AlertTriangle className="ml-auto size-3.5 text-amber-500" aria-label={settings.active.verify_error || "Not verified"} />)}
               </div>
               {settings.profiles.length > 1 ? (
                 <select className="input py-1 text-xs" value={settings.active_profile} onChange={(e) => switchTo(e.target.value)} aria-label="Active voice">

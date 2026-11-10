@@ -71,6 +71,9 @@ text-to-speech voices it and the video is rendered. Gemini does not write the sc
 
 - The script is spoken by a text-to-speech voice: no markdown, no URLs, spell out symbols and letters
   said one by one. `preview_voice(text)` returns a WAV for checking how a name is pronounced.
+- Pace: if the user wants the narration faster or slower, set `update_project(project_id, speed=...)`
+  (0.7 to 1.4; 1.1 is 10% faster) after trying it with `preview_voice(text, project_id, speed)`, which
+  reports the clip's words per minute. A voice's default pace is set per voice profile in the studio.
 - Long waits in a live app (deploys, tests) get `wait_for` with `ff: true` and a short `what`, so the
   video fast-forwards them behind a banner.
 - If the user asks for "a demo" and it is unclear whether they mean a video, ask before starting one.

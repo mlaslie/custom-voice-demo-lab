@@ -1,9 +1,10 @@
-import { ArrowRight, CheckCircle2, KeyRound, Lock, Mic, Plus } from "lucide-react";
+import { AlertTriangle, ArrowRight, CheckCircle2, KeyRound, Lock, Mic, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, type Settings, type Voice } from "../api";
-import { VoiceButton } from "../components/hooks";
-import { SAMPLE, VoicePicker } from "../components/VoicePicker";
+import { VoicePicker } from "../components/VoicePicker";
+import { VerifyStatus } from "../components/VerifyStatus";
+import { PacingControl } from "../components/PacingControl";
 import { Alert, Button, Field } from "../components/ui";
 
 const DEFAULT_STYLE = "clear, warm, confident product-demo narrator; unhurried pace";
@@ -19,9 +20,11 @@ export default function Setup({ settings, onChange }: { settings: Settings | nul
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [style, setStyle] = useState(DEFAULT_STYLE);
+  const [speed, setSpeed] = useState(1);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [done, setDone] = useState<"" | "first" | "more">("");
+  const [savedId, setSavedId] = useState("");
 
   useEffect(() => {
     if (!settings) return;
@@ -43,17 +46,39 @@ export default function Setup({ settings, onChange }: { settings: Settings | nul
   const saveProfile = () => run("profile", async () => {
     if (!voice) return;
     const wasFirst = !settings?.profiles.length;
-    onChange(await api.addProfile({ name: name.trim() || voice.name, description: description.trim(), key_id: keyId, voice: voice.id,
-      voice_name: voice.name, kind: voice.kind, style, activate: true }));
+    const before = new Set(settings?.profiles.map((v) => v.id));
+    const next = await api.addProfile({ name: name.trim() || voice.name, description: description.trim(), key_id: keyId, voice: voice.id,
+      voice_name: voice.name, kind: voice.kind, style, speed, activate: true });
+    onChange(next);
+    setSavedId(next.profiles.find((v) => !before.has(v.id))?.id ?? "");
     setDone(wasFirst ? "first" : "more");
   });
 
+  const saved = settings.profiles.find((v) => v.id === savedId);
+  if (done && saved && !saved.verified_at) {
+    return (
+      <div className="mx-auto max-w-xl">
+        <div className="card flex flex-col items-center gap-3 px-6 py-12 text-center">
+          <AlertTriangle className="size-10 text-amber-500" />
+          <h1 className="text-xl font-semibold">Saved, but the voice test failed</h1>
+          <p className="text-sm text-zinc-500">The key and voice were saved, but a test phrase could not be spoken:</p>
+          <p className="w-full rounded-lg bg-amber-50 px-3 py-2 text-left text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">{saved.verify_error}</p>
+          <div className="mt-2 flex items-center gap-3">
+            <VerifyStatus profile={saved} onChange={onChange} />
+            <Link to="/settings"><Button>Fix in Settings</Button></Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
   if (done) {
     return (
       <div className="mx-auto max-w-xl">
         <div className="card flex flex-col items-center gap-3 px-6 py-12 text-center">
           <CheckCircle2 className="size-10 text-emerald-500" />
           <h1 className="text-xl font-semibold">{done === "first" ? "You're all set" : "Voice saved"}</h1>
+          {saved && <p className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-sm font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+            <CheckCircle2 className="size-4" />Verified: the key works and the voice spoke a test phrase</p>}
           <p className="text-sm text-zinc-500">
             <b>{name.trim() || voice?.name}</b> is now the active voice, for this session and future ones.
             Go back to your chat to carry on: the assistant will pick it up. You can add more voices or switch between them in Settings.
@@ -138,9 +163,9 @@ export default function Setup({ settings, onChange }: { settings: Settings | nul
           </Field>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          {voice && <VoiceButton text={SAMPLE} with={{ key_id: keyId, voice: voice.id, style }} label="Hear it with this style" />}
+          {voice && <PacingControl value={speed} onChange={setSpeed} with={{ key_id: keyId, voice: voice.id, style }} />}
           <Button variant="primary" className="ml-auto" icon={first ? <Mic className="size-4" /> : <ArrowRight className="size-4" />} busy={busy === "profile"} disabled={!voice} onClick={saveProfile}>
-            {first ? "Save and finish" : "Save voice"}
+            {busy === "profile" ? "Saving and testing the voice…" : first ? "Save and finish" : "Save voice"}
           </Button>
         </div>
       </section>

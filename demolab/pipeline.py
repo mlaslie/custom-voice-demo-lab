@@ -4,7 +4,11 @@ from __future__ import annotations
 import pathlib
 import re
 import shutil
+import subprocess
 import time
+from typing import NamedTuple
+
+import httpx
 
 from . import browser, config, gemini, store
 from .cards import card_key, render_cards
@@ -12,33 +16,94 @@ from .compose import Recorded, Still, compose
 from .models import Project, Render
 
 
-def voice_for(p: Project | None = None, profile_id: str = "") -> tuple[str, str, str, str]:
-    """(voice, style, tts model, key) for a project: its profile (else the active one), then its overrides."""
+class Voicing(NamedTuple):
+    voice: str
+    style: str
+    model: str
+    key: str
+    speed: float
+
+
+def voice_for(p: Project | None = None, profile_id: str = "") -> Voicing:
+    """How a project is narrated: its profile (else the active one), then the project's overrides."""
     v = config.resolve(profile_id or (p.profile_id if p else ""))
-    return ((p and p.voice_id) or v.voice, (p and p.voice_style) or v.style, config.load().tts_model, v.key)
+    speed = (p.speed if p and p.speed else v.profile.speed if v.profile else 1.0)
+    return Voicing((p and p.voice_id) or v.voice, (p and p.voice_style) or v.style, config.load().tts_model,
+                   v.key, config.clamp_speed(speed))
+
+
+def speed_for(p: Project) -> float:
+    try:
+        return voice_for(p).speed
+    except config.SetupNeeded:
+        return config.clamp_speed(p.speed or 1.0)
+
+
+def _tempo(raw: pathlib.Path, speed: float) -> pathlib.Path:
+    """The clip at `speed` (time-stretched, pitch kept), cached next to the original."""
+    if abs(speed - 1) < 0.005:
+        return raw
+    out = raw.with_name(f"{raw.stem}@{speed:.2f}.wav")
+    if not out.exists():
+        tmp = out.with_suffix(".part.wav")
+        subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(raw),
+                        "-filter:a", f"atempo={speed}", "-ar", str(gemini.SR), "-ac", "1", "-c:a", "pcm_s16le",
+                        str(tmp)], check=True)
+        tmp.replace(out)
+    return out
 
 
 def narrate(p: Project, text: str) -> tuple[pathlib.Path, float]:
-    voice, style, model, key = voice_for(p)
-    wav = store.sub(p.id, "audio") / f"{gemini.tts_cache_key(text, voice, style, model)}.wav"
-    if wav.exists():
-        return wav, gemini.wav_seconds(wav)
-    return wav, gemini.synth(text, wav, voice, style, model, key=key)
+    v = voice_for(p)
+    raw = store.sub(p.id, "audio") / f"{gemini.tts_cache_key(text, v.voice, v.style, v.model)}.wav"
+    if not raw.exists():
+        gemini.synth(text, raw, v.voice, v.style, v.model, key=v.key)
+    wav = _tempo(raw, v.speed)
+    return wav, gemini.wav_seconds(wav)
 
 
 def preview(text: str, pid: str | None = None, profile_id: str = "", key_id: str = "", voice: str = "",
-            style: str | None = None) -> pathlib.Path:
-    """Speak text in a project's voice, a profile, or (while choosing) any voice with a saved key."""
+            style: str | None = None, speed: float | None = None) -> pathlib.Path:
+    """Speak text in a project's voice, a profile, or (while choosing) any voice with a saved key. speed
+    tries a pace before saving it (default: the project's or profile's)."""
     if key_id and voice:
-        key, model = config.key_value(key_id), config.load().tts_model
+        key, model, speed0 = config.key_value(key_id), config.load().tts_model, 1.0
         style = config.DEFAULT_STYLE if style is None else style
     else:
-        voice, style0, model, key = voice_for(store.get(pid) if pid else None, profile_id)
-        style = style0 if style is None else style
-    wav = config.HOME / "previews" / f"{gemini.tts_cache_key(text, voice, style, model)}.wav"
-    if not wav.exists():
-        gemini.synth(text, wav, voice, style, model, key=key)
-    return wav
+        v = voice_for(store.get(pid) if pid else None, profile_id)
+        voice, model, key, speed0 = v.voice, v.model, v.key, v.speed
+        style = v.style if style is None else style
+    raw = config.HOME / "previews" / f"{gemini.tts_cache_key(text, voice, style, model)}.wav"
+    if not raw.exists():
+        gemini.synth(text, raw, voice, style, model, key=key)
+    return _tempo(raw, config.clamp_speed(speed0 if speed is None else speed))
+
+
+VERIFY_TEXT = "Voice check. This voice is ready to narrate your demos."
+
+
+def verify_profile(vid: str) -> config.VoiceProfile:
+    """Prove a saved key + voice pair works end to end: the key is in the keychain, Gemini accepts it, the
+    voice is one the key can use, and a short phrase comes back as audio. Records the result."""
+    s = config.load()
+    v = s.profile(vid)
+    err = ""
+    try:
+        key = config.key_value(v.key_id)
+        ids = {x["id"] for x in gemini.list_voices(key)}
+        if v.voice not in ids:
+            raise gemini.GeminiError(f"This key's AI Studio project has no voice {v.voice!r}. Use a key from the "
+                                     "project that created the voice, or pick another voice.")
+        wav = config.HOME / "previews" / f"{gemini.tts_cache_key(VERIFY_TEXT, v.voice, v.style, s.tts_model)}.wav"
+        if not wav.exists() and gemini.synth(VERIFY_TEXT, wav, v.voice, v.style, s.tts_model, key=key) < 0.5:
+            raise gemini.GeminiError("The voice returned almost no audio.")
+    except (gemini.GeminiError, config.SetupNeeded, httpx.HTTPError) as e:
+        err = str(e)[:400] or e.__class__.__name__
+
+    def record(q: config.Settings):
+        p = q.profile(vid)
+        p.verified_at, p.verify_error = (0, err) if err else (time.time(), "")
+    return config.mutate(record).profile(vid)
 
 
 def _slug(s: str) -> str:

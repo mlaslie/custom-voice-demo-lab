@@ -67,9 +67,9 @@ _URL = re.compile(r"https?://|www\.", re.I)
 _MD = re.compile(r"(\*\*|__|^#+\s|^\s*[-*]\s|`|\[[^\]]+\]\()", re.M)
 
 
-def seconds(segments: list[Segment]) -> float:
+def seconds(segments: list[Segment], speed: float = 1.0) -> float:
     words = sum(len(f"{s.narration} {s.after_narration}".split()) for s in segments)
-    return words / WORDS_PER_SECOND
+    return words / WORDS_PER_SECOND / speed
 
 
 def validate(raw: list[dict], p: Project) -> tuple[list[Segment], list[str], list[str]]:

@@ -17,7 +17,7 @@ from .models import Project, Segment
 STATIC = pathlib.Path(__file__).parent / "static"
 ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
 
-app = FastAPI(title="Voice Demo Lab", version="0.3.1")
+app = FastAPI(title="Voice Demo Lab", version="0.3.2")
 
 
 @app.middleware("http")
@@ -130,6 +130,7 @@ def key_voices(kid: str, locale: str = "", q: str = "", limit: int = 400):
 class ProfileIn(BaseModel):
     name: str
     description: str = ""
+    speed: float = 1.0
     key_id: str
     voice: str
     voice_name: str = ""
@@ -146,13 +147,17 @@ def add_profile(b: ProfileIn):
         s.profiles.append(v)
         if b.activate or not s.active_profile:
             s.active_profile = v.id
+        added.append(v.id)
+    added: list[str] = []
     config.mutate(add)
+    pipeline.verify_profile(added[0])         # a short spoken test; the result shows next to the voice
     return config.public_settings()
 
 
 class ProfilePatch(BaseModel):
     name: str | None = None
     description: str | None = None
+    speed: float | None = None
     key_id: str | None = None
     voice: str | None = None
     voice_name: str | None = None
@@ -167,9 +172,23 @@ def patch_profile(vid: str, b: ProfilePatch):
         changes = b.model_dump(exclude_none=True)
         if "key_id" in changes:
             s.key(changes["key_id"])
+        if "speed" in changes:
+            changes["speed"] = config.clamp_speed(changes["speed"])
+        if {"key_id", "voice"} & changes.keys():
+            changes.update(verified_at=0, verify_error="")
+            retest.append(vid)
         s.profiles[s.profiles.index(v)] = v.model_copy(update=changes)
+    retest: list[str] = []
     config.mutate(patch)
+    for x in retest:
+        pipeline.verify_profile(x)
     return config.public_settings()
+
+
+@app.post("/api/profiles/{vid}/verify")
+def verify_profile(vid: str):
+    v = pipeline.verify_profile(vid)
+    return {"ok": not v.verify_error, "error": v.verify_error, "settings": config.public_settings()}
 
 
 @app.delete("/api/profiles/{vid}")
@@ -201,14 +220,19 @@ class PreviewIn(BaseModel):
     key_id: str = ""             # with voice: try any voice the key can use, before saving a profile
     voice: str = ""
     style: str | None = None
+    speed: float | None = None   # try a pace before saving it
 
 
 @app.post("/api/voice/preview")
 def voice_preview(v: PreviewIn):
-    if not v.text.strip():
+    text = v.text.strip()[:2000]
+    if not text:
         raise ValueError("Nothing to say.")
-    return FileResponse(pipeline.preview(v.text.strip()[:2000], v.project_id, v.profile_id, v.key_id, v.voice,
-                                         v.style), media_type="audio/wav")
+    wav = pipeline.preview(text, v.project_id, v.profile_id, v.key_id, v.voice, v.style, v.speed)
+    secs = gemini.wav_seconds(wav)
+    return FileResponse(wav, media_type="audio/wav", headers={   # so a test clip can report its pace
+        "X-Seconds": f"{secs:.2f}", "X-Words-Per-Minute": f"{len(text.split()) / secs * 60:.0f}",
+        "Access-Control-Expose-Headers": "X-Seconds, X-Words-Per-Minute"})
 
 
 # ---- projects -----------------------------------------------------------------------------------
@@ -248,13 +272,17 @@ class ProjectPatch(BaseModel):
     audience: str | None = None
     instructions: str | None = None
     profile_id: str | None = None
+    speed: float | None = None
     voice_id: str | None = None
     voice_style: str | None = None
 
 
 @app.patch("/api/projects/{pid}")
 def patch_project(pid: str, b: ProjectPatch):
-    return store.mutate(pid, lambda p: [setattr(p, k, v) for k, v in b.model_dump(exclude_none=True).items()])
+    changes = b.model_dump(exclude_none=True)
+    if changes.get("speed"):              # 0 = use the voice profile's speed
+        changes["speed"] = config.clamp_speed(changes["speed"])
+    return store.mutate(pid, lambda p: [setattr(p, k, v) for k, v in changes.items()])
 
 
 @app.delete("/api/projects/{pid}")
@@ -297,7 +325,7 @@ def put_segments(pid: str, segs: list[dict] = Body(...)):
     def apply(q: Project):
         q.segments, q.script_approved = parsed, False
     q = store.mutate(pid, apply)
-    return {"project": q, "warnings": warnings, "seconds": script.seconds(parsed)}
+    return {"project": q, "warnings": warnings, "seconds": script.seconds(parsed, pipeline.speed_for(q))}
 
 
 @app.patch("/api/projects/{pid}/segments/{sid}")

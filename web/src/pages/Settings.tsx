@@ -4,6 +4,8 @@ import { Link } from "react-router-dom";
 import { api, type Settings } from "../api";
 import { VoiceButton } from "../components/hooks";
 import { SAMPLE } from "../components/VoicePicker";
+import { VerifyStatus } from "../components/VerifyStatus";
+import { PacingControl } from "../components/PacingControl";
 import { Alert, Badge, Button, Field } from "../components/ui";
 
 export default function SettingsPage({ onChange }: { onChange: (s: Settings) => void }) {
@@ -58,12 +60,16 @@ export default function SettingsPage({ onChange }: { onChange: (s: Settings) => 
                       onBlur={(e) => e.target.value.trim() && e.target.value !== v.name && run("p", async () => update(await api.patchProfile(v.id, { name: e.target.value.trim() })))} />
                     {on && <Badge tone="blue">active</Badge>}
                     <Badge tone={v.kind === "custom" ? "violet" : "zinc"}>{v.kind}</Badge>
+                    <VerifyStatus profile={v} onChange={update} />
                   </div>
                   <input className="w-full bg-transparent text-sm text-zinc-600 outline-none placeholder:text-zinc-400 focus:underline decoration-brand-500/40 dark:text-zinc-300" defaultValue={v.description} placeholder="Add a description: when to use this voice"
                     onBlur={(e) => e.target.value !== v.description && run("p", async () => update(await api.patchProfile(v.id, { description: e.target.value.trim() })))} />
                   <div className="truncate text-xs text-zinc-500">{v.voice_name || v.voice} · <span className="font-mono">{v.voice}</span> · key: {keyName_(v.key_id)}</div>
                   <input className="input text-xs" defaultValue={v.style} placeholder="Delivery style"
                     onBlur={(e) => e.target.value !== v.style && run("p", async () => update(await api.patchProfile(v.id, { style: e.target.value })))} />
+                  <PacingControl value={v.speed} with={{ profile_id: v.id }}
+                    onChange={(speed) => { setS({ ...s, profiles: s.profiles.map((x) => (x.id === v.id ? { ...x, speed } : x)) }); run("p", async () => update(await api.patchProfile(v.id, { speed }))); }} />
+                  {v.verify_error && <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">{v.verify_error}</p>}
                 </div>
                 <div className="flex items-center gap-1 sm:pt-1">
                   <VoiceButton text={SAMPLE} with={{ profile_id: v.id }} label="Sample" />

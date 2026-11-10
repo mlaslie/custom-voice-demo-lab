@@ -69,3 +69,57 @@ def test_setup_flow(home):
     st = c.delete(f"/api/keys/{kid}").json()
     assert st["setup_needed"] and st["keys"] == []
     assert config.key_secret(kid) not in json.loads((home / "secrets.json").read_text())
+
+
+def test_voice_pairs_are_verified(home):
+    from demolab.api import app
+    c = TestClient(app, base_url="http://127.0.0.1")
+    kid = c.post("/api/keys", json={"name": "K", "key": "AIzaFAKEFAKEFAKEFAKEwxyz"}).json()["key"]["id"]
+
+    st = c.post("/api/profiles", json={"name": "Good", "key_id": kid, "voice": "kore", "kind": "standard"}).json()
+    good = st["active"]
+    assert good["verified_at"] > 0 and good["verify_error"] == ""            # tested on save
+
+    st = c.post("/api/profiles", json={"name": "Wrong", "key_id": kid, "voice": "voice_from_another_project"}).json()
+    bad = next(v for v in st["profiles"] if v["name"] == "Wrong")
+    assert bad["verified_at"] == 0 and "has no voice 'voice_from_another_project'" in bad["verify_error"]
+
+    st = c.patch(f"/api/profiles/{bad['id']}", json={"voice": "puck", "kind": "standard"}).json()
+    assert next(v for v in st["profiles"] if v["id"] == bad["id"])["verified_at"] > 0   # retested on change
+    st = c.patch(f"/api/profiles/{good['id']}", json={"style": "slower"}).json()
+    assert next(v for v in st["profiles"] if v["id"] == good["id"])["verified_at"] > 0  # style keeps it
+
+    config.delete_secret(config.key_secret(kid))                             # key vanished from the keychain
+    r = c.post(f"/api/profiles/{good['id']}/verify").json()
+    assert not r["ok"] and "missing from the keychain" in r["error"]
+
+
+def test_pacing(home, monkeypatch):
+    from demolab import store
+    from demolab.api import app
+    monkeypatch.setattr(store, "ROOT", home / "projects")
+    c = TestClient(app, base_url="http://127.0.0.1")
+    kid = c.post("/api/keys", json={"name": "K", "key": "AIzaFAKEFAKEFAKEFAKEwxyz"}).json()["key"]["id"]
+    st = c.post("/api/profiles", json={"name": "V", "key_id": kid, "voice": "kore", "kind": "standard", "speed": 3}).json()
+    vid = st["active"]["id"]
+    assert st["active"]["speed"] == 1.4                                     # clamped on create
+    assert c.patch(f"/api/profiles/{vid}", json={"speed": 0.1}).json()["active"]["speed"] == 0.7   # and on edit
+    c.patch(f"/api/profiles/{vid}", json={"speed": 1.0})
+
+    text = "one two three four five six seven eight nine ten eleven twelve thirteen"
+    base = c.post("/api/voice/preview", json={"text": text, "profile_id": vid})
+    fast = c.post("/api/voice/preview", json={"text": text, "profile_id": vid, "speed": 1.25})
+    s1, s2 = float(base.headers["X-Seconds"]), float(fast.headers["X-Seconds"])
+    assert abs(s2 - s1 / 1.25) < 0.1                                        # time-stretched to match
+    assert int(fast.headers["X-Words-Per-Minute"]) > int(base.headers["X-Words-Per-Minute"])
+
+    p = c.post("/api/projects", json={"name": "P"}).json()
+    seg = [{"type": "card", "title": "T", "narration": " ".join(["word"] * 132)}]
+    at1 = c.put(f"/api/projects/{p['id']}/segments", json=seg).json()["seconds"]
+    c.patch(f"/api/projects/{p['id']}", json={"speed": 1.2})               # this demo only
+    at12 = c.put(f"/api/projects/{p['id']}/segments", json=seg).json()["seconds"]
+    assert abs(at12 - at1 / 1.2) < 0.5
+    from demolab import pipeline
+    assert pipeline.voice_for(store.get(p["id"])).speed == 1.2
+    c.patch(f"/api/projects/{p['id']}", json={"speed": 0})                 # back to the voice's pace
+    assert pipeline.voice_for(store.get(p["id"])).speed == 1.0

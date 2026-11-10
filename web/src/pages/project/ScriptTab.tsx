@@ -13,7 +13,7 @@ const TYPE_META: Record<SegType, { label: string; tone: "blue" | "violet" | "amb
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
 
-export default function ScriptTab({ project: p, setProject, goto }: TabProps) {
+export default function ScriptTab({ project: p, setProject, goto, speed }: TabProps) {
   const [segs, setSegs] = useState<Segment[]>(p.segments);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -51,7 +51,7 @@ export default function ScriptTab({ project: p, setProject, goto }: TabProps) {
     );
   }
 
-  const total = segs.reduce((t, s) => t + speakSeconds(s.narration) + speakSeconds(s.after_narration) + (s.type === "card" && !s.narration ? 4 : 1.4), 0);
+  const total = segs.reduce((t, s) => t + speakSeconds(s.narration, speed) + speakSeconds(s.after_narration, speed) + (s.type === "card" && !s.narration ? 4 : 1.4), 0);
   const reviewed = segs.filter((s) => s.approved).length;
 
   return (
@@ -77,7 +77,7 @@ export default function ScriptTab({ project: p, setProject, goto }: TabProps) {
       {err && <Alert>{err}</Alert>}
 
       {segs.map((s, i) => (
-        <SegmentCard key={s.id} p={p} s={s} i={i} last={i === segs.length - 1}
+        <SegmentCard speed={speed} key={s.id} p={p} s={s} i={i} last={i === segs.length - 1}
           onLocal={(b) => setSegs(segs.map((x) => (x.id === s.id ? { ...x, ...b } : x)))}
           onSave={(b) => patch(s.id, b)}
           onMove={(d) => move(i, d)}
@@ -89,8 +89,8 @@ export default function ScriptTab({ project: p, setProject, goto }: TabProps) {
   );
 }
 
-function SegmentCard({ p, s, i, last, onLocal, onSave, onMove, onDelete, onInsert }: {
-  p: Project; s: Segment; i: number; last: boolean;
+function SegmentCard({ p, s, i, last, speed, onLocal, onSave, onMove, onDelete, onInsert }: {
+  speed: number; p: Project; s: Segment; i: number; last: boolean;
   onLocal: (b: Partial<Segment>) => void; onSave: (b: Partial<Segment>) => void;
   onMove: (d: number) => void; onDelete: () => void; onInsert: (t: SegType) => void;
 }) {
@@ -103,7 +103,7 @@ function SegmentCard({ p, s, i, last, onLocal, onSave, onMove, onDelete, onInser
     onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => onLocal({ [k]: e.target.value }),
     onBlur: (e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) => onSave({ [k]: e.target.value }),
   });
-  const secs = speakSeconds(s.narration) + speakSeconds(s.after_narration);
+  const secs = speakSeconds(s.narration, speed) + speakSeconds(s.after_narration, speed);
 
   return (
     <div className="group/seg">

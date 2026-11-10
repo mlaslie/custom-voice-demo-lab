@@ -52,6 +52,7 @@ export interface Project {
   audience: string;
   instructions: string;
   profile_id: string;
+  speed: number;
   voice_id: string;
   voice_style: string;
   sources: Source[];
@@ -80,6 +81,9 @@ export interface VoiceProfile {
   voice_name: string;
   kind: "custom" | "standard";
   style: string;
+  speed: number;
+  verified_at: number;
+  verify_error: string;
 }
 
 export interface Voice { id: string; name: string; kind: "custom" | "standard"; locale: string }
@@ -102,7 +106,7 @@ export interface Settings {
 }
 
 /** What a preview speaks with: a project's voice, a saved profile, or any voice with a saved key. */
-export interface PreviewWith { project_id?: string; profile_id?: string; key_id?: string; voice?: string; style?: string }
+export interface PreviewWith { project_id?: string; profile_id?: string; key_id?: string; voice?: string; style?: string; speed?: number }
 
 export interface Job {
   id: string; project_id: string; kind: string; state: "running" | "done" | "error"; progress: number;
@@ -131,15 +135,22 @@ export const api = {
   saveSettings: (s: Partial<Settings>) => req<Settings>("PUT", "/api/settings", s),
   models: () => req<{ name: string; display?: string; methods: string[] }[]>("GET", "/api/models"),
   preview: (text: string, w: PreviewWith = {}) => req<Blob>("POST", "/api/voice/preview", { text, ...w }),
+  /** A test clip plus its measured length and pace. */
+  testClip: async (text: string, w: PreviewWith) => {
+    const r = await fetch("/api/voice/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, ...w }) });
+    if (!r.ok) { let m = `${r.status}`; try { m = (await r.json()).detail ?? m; } catch { /* not json */ } throw new Error(m); }
+    return { blob: await r.blob(), seconds: Number(r.headers.get("X-Seconds")), wpm: Number(r.headers.get("X-Words-Per-Minute")) };
+  },
   addKey: (name: string, key: string) =>
     req<{ key: ApiKey; custom_voices: number; settings: Settings }>("POST", "/api/keys", { name, key }),
   deleteKey: (id: string) => req<Settings>("DELETE", `/api/keys/${id}`),
   keyVoices: (id: string, locale = "", q = "") =>
     req<KeyVoices>("GET", `/api/keys/${id}/voices?locale=${encodeURIComponent(locale)}&q=${encodeURIComponent(q)}`),
-  addProfile: (b: Omit<VoiceProfile, "id"> & { activate?: boolean }) => req<Settings>("POST", "/api/profiles", b),
+  addProfile: (b: Omit<VoiceProfile, "id" | "verified_at" | "verify_error" | "speed"> & { speed?: number; activate?: boolean }) => req<Settings>("POST", "/api/profiles", b),
   patchProfile: (id: string, b: Partial<VoiceProfile>) => req<Settings>("PATCH", `/api/profiles/${id}`, b),
   deleteProfile: (id: string) => req<Settings>("DELETE", `/api/profiles/${id}`),
   activateProfile: (id: string) => req<Settings>("POST", `/api/profiles/${id}/activate`),
+  verifyProfile: (id: string) => req<{ ok: boolean; error: string; settings: Settings }>("POST", `/api/profiles/${id}/verify`),
 
   projects: () => req<ProjectSummary[]>("GET", "/api/projects"),
   project: (id: string) => req<Project>("GET", `/api/projects/${id}`),
@@ -174,8 +185,8 @@ export const newSegment = (type: SegType): Segment => ({
   notes: "", approved: false,
 });
 
-/** ~130 words per minute, measured on the approved narrator style. */
-export const speakSeconds = (text: string) => (text.trim() ? text.trim().split(/\s+/).length / 2.2 : 0);
+/** ~130 words per minute at 1.0x over a whole video (pauses included), measured on the approved narrator style. */
+export const speakSeconds = (text: string, speed = 1) => (text.trim() ? text.trim().split(/\s+/).length / 2.2 / speed : 0);
 
 const regionNames = typeof Intl !== "undefined" && "DisplayNames" in Intl
   ? new Intl.DisplayNames(undefined, { type: "language" }) : null;

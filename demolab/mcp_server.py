@@ -18,7 +18,7 @@ from . import client
 
 READ = ToolAnnotations(readOnlyHint=True)
 
-mcp = MCPServer("voice-demo-lab", version="0.3.1", instructions=(
+mcp = MCPServer("voice-demo-lab", version="0.3.2", instructions=(
     "Voice Demo Lab turns what this coding session analyzed (code, slides, a running app) into a narrated "
     "demo video, in the user's custom or a standard Gemini TTS voice. YOU write the script from the session; "
     "the plugin checks it, voices it and renders it. Flow: get_settings (if setup_needed: "
@@ -43,7 +43,7 @@ def _summary(p: dict, decks: bool = False) -> dict:
     out = {
         "id": p["id"], "name": p["name"], "base_url": p["base_url"], "goal": p["goal"],
         "audience": p.get("audience", ""), "instructions": p["instructions"],
-        "voice_profile": p.get("profile_id") or "(active profile)",
+        "voice_profile": p.get("profile_id") or "(active profile)", "speed": p.get("speed") or "(the voice's)",
         "script_approved": p["script_approved"], "has_login": p["has_login"],
         "slide_count": len(p["slides"]),
         "segments": [{k: v for k, v in s.items() if v not in ("", [], None) or k in ("type", "narration")}
@@ -90,7 +90,8 @@ def get_settings() -> dict:
 
 
 def _profile(v: dict) -> dict:
-    return {k: v[k] for k in ("id", "name", "description", "voice_name", "voice", "kind", "style")}
+    return {k: v[k] for k in ("id", "name", "description", "voice_name", "voice", "kind", "style", "speed")} | \
+        {"verified": bool(v.get("verified_at")), **({"verify_error": v["verify_error"]} if v.get("verify_error") else {})}
 
 
 @mcp.tool()
@@ -121,6 +122,20 @@ def _find_profile(st: dict, profile: str) -> dict:
     names = ", ".join(v["name"] for v in st["profiles"]) or "none yet"
     raise ValueError(f"No voice profile called {profile!r}. Saved profiles: {names}. The user can add one "
                      f"at {client.BASE}/settings.")
+
+
+@mcp.tool()
+def verify_voice_profile(profile: str = "") -> dict:
+    """Test a saved voice profile end to end (key accepted, voice available to that key, a short phrase
+    spoken). profile: a name or id; default the active one. Takes a few seconds. If it fails, tell the user
+    the error and point them to the settings page to fix the key or voice."""
+    st = client.call("GET", "/api/settings")
+    v = _find_profile(st, profile) if profile else st["active"]
+    if not v:
+        return {"verified": False, "error": "No voice set up yet.", "setup_url": f"{client.BASE}/setup"}
+    r = client.call("POST", f"/api/profiles/{v['id']}/verify", timeout=120)
+    return {"profile": v["name"], "verified": r["ok"], **({"error": r["error"],
+            "settings_url": f"{client.BASE}/settings"} if not r["ok"] else {})}
 
 
 @mcp.tool()
@@ -216,11 +231,14 @@ def get_project(project_id: str) -> dict:
 @mcp.tool()
 def update_project(project_id: str, name: str | None = None, base_url: str | None = None, goal: str | None = None,
                    brief: str | None = None, audience: str | None = None, instructions: str | None = None,
-                   voice_style: str | None = None, decks: list[str] | None = None) -> dict:
+                   voice_style: str | None = None, speed: float | None = None, decks: list[str] | None = None) -> dict:
     """Edit project fields, or attach more decks. voice_style overrides the voice profile's delivery style
-    for this project ("" clears it). To give the project another voice, use use_voice_profile."""
+    for this project ("" clears it). speed sets this demo's narration pace, 0.7 to 1.4 (1.1 = 10% faster;
+    0 = the voice profile's pace); try it first with preview_voice(text, project_id, speed). To give the
+    project another voice, use use_voice_profile."""
     body = {k: v for k, v in dict(name=name, base_url=base_url, goal=goal, brief=brief, audience=audience,
-                                  instructions=instructions, voice_style=voice_style).items() if v is not None}
+                                  instructions=instructions, voice_style=voice_style, speed=speed).items()
+            if v is not None}
     p = client.call("PATCH", f"/api/projects/{project_id}", json=body)
     for ref in decks or []:
         p = client.call("POST", f"/api/projects/{project_id}/decks", json={"ref": ref})
@@ -271,14 +289,21 @@ def dry_run(project_id: str) -> dict:
 
 
 @mcp.tool()
-def preview_voice(text: str, project_id: str = "") -> str:
-    """Synthesize text in the project's voice (else the active profile); returns the path of the WAV file."""
+def preview_voice(text: str, project_id: str = "", speed: float | None = None) -> dict:
+    """Speak text in the project's voice (else the active profile) as a test clip: returns the WAV's path,
+    its length and its measured words per minute. speed (0.7 to 1.4) tries a pace without saving it."""
+    import httpx
     from . import config
-    data = client.call("POST", "/api/voice/preview", json={"text": text, "project_id": project_id or None})
+    client.ensure_server()
+    r = httpx.post(f"{client.BASE}/api/voice/preview", timeout=180,
+                   json={"text": text, "project_id": project_id or None, "speed": speed})
+    if r.status_code >= 400:
+        raise client.ApiError("POST", "/api/voice/preview", r.status_code, r.json().get("detail"))
     out = config.HOME / "previews" / "last_preview.wav"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_bytes(data)
-    return str(out)
+    out.write_bytes(r.content)
+    return {"wav": str(out), "seconds": float(r.headers["X-Seconds"]),
+            "words_per_minute": int(r.headers["X-Words-Per-Minute"])}
 
 
 @mcp.tool()

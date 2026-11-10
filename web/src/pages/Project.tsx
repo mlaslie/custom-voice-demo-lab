@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, type Project, type Settings } from "../api";
 import { Alert, Field } from "../components/ui";
+import { PacingControl } from "../components/PacingControl";
 import RehearseTab from "./project/RehearseTab";
 import RenderTab from "./project/RenderTab";
 import ScriptTab from "./project/ScriptTab";
@@ -18,6 +19,7 @@ export interface TabProps {
   project: Project;
   setProject: (p: Project) => void;
   refresh: () => Promise<Project>;
+  speed: number;   // the narration speed this project renders at
   goto: (t: Tab) => void;
 }
 
@@ -49,6 +51,8 @@ export default function ProjectPage() {
   const tab = (TABS.some((t) => t.key === params.get("tab")) ? params.get("tab") : "script") as Tab;
   const goto = (t: Tab) => setParams({ tab: t });
 
+  const voiceSpeed = (settings?.profiles.find((v) => v.id === p.profile_id) ?? settings?.active)?.speed ?? 1;
+  const speed = p.speed || voiceSpeed;
   const saveBrief = async (patch: Partial<Project>) => setP(await api.patchProject(p.id, patch));
 
   return (
@@ -85,6 +89,13 @@ export default function ProjectPage() {
           <Field label="Audience"><input className="input" defaultValue={p.audience} onBlur={(e) => e.target.value !== p.audience && saveBrief({ audience: e.target.value })} placeholder="Default: new to the subject" /></Field>
           <Field label="Instructions for the script" hint="Tone, length, what to stress or skip. Your agent reads these."><textarea className="input min-h-24" defaultValue={p.instructions} onBlur={(e) => e.target.value !== p.instructions && saveBrief({ instructions: e.target.value })} /></Field>
           <Field label="Delivery style override" className="md:col-span-2"><input className="input" defaultValue={p.voice_style} onBlur={(e) => e.target.value !== p.voice_style && saveBrief({ voice_style: e.target.value })} placeholder="Empty = the voice's own style" /></Field>
+          <div className="md:col-span-2">
+            <span className="label">Narration pace for this demo</span>
+            <PacingControl value={speed} label={p.speed ? "Pace (this demo)" : "Pace (the voice's)"} with={{ project_id: p.id }}
+              text={p.segments.find((s) => s.narration.split(/\s+/).length > 20)?.narration}
+              onChange={(x) => saveBrief({ speed: x })}
+              inherited={p.speed ? { speed: voiceSpeed, onReset: () => saveBrief({ speed: 0 }) } : null} />
+          </div>
         </div>
       )}
 
@@ -104,9 +115,9 @@ export default function ProjectPage() {
         })}
       </nav>
 
-      {tab === "script" && <ScriptTab project={p} setProject={setP} refresh={refresh} goto={goto} />}
-      {tab === "rehearse" && <RehearseTab project={p} setProject={setP} refresh={refresh} goto={goto} />}
-      {tab === "render" && <RenderTab project={p} setProject={setP} refresh={refresh} goto={goto} />}
+      {tab === "script" && <ScriptTab project={p} speed={speed} setProject={setP} refresh={refresh} goto={goto} />}
+      {tab === "rehearse" && <RehearseTab project={p} speed={speed} setProject={setP} refresh={refresh} goto={goto} />}
+      {tab === "render" && <RenderTab project={p} speed={speed} setProject={setP} refresh={refresh} goto={goto} />}
     </div>
   );
 }

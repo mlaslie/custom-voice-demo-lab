@@ -16,7 +16,7 @@ import time
 import uuid
 from typing import Literal, NamedTuple
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 DEFAULT_HOME = pathlib.Path.home() / ".demolab"
 HOME = pathlib.Path(os.environ.get("DEMOLAB_HOME", DEFAULT_HOME))
@@ -28,6 +28,11 @@ _lock = threading.Lock()
 
 
 DEFAULT_STYLE = "clear, warm, confident product-demo narrator; unhurried pace"
+SPEED_MIN, SPEED_MAX = 0.7, 1.4   # narration speed range (1.0 = the voice's natural pace)
+
+
+def clamp_speed(x: float) -> float:
+    return round(min(SPEED_MAX, max(SPEED_MIN, x)), 2)
 
 
 def _id(prefix: str) -> str:
@@ -50,6 +55,14 @@ class VoiceProfile(BaseModel):
     voice_name: str = ""       # its display name
     kind: Literal["custom", "standard"] = "custom"
     style: str = DEFAULT_STYLE
+    speed: float = 1.0         # narration speed, applied by time-stretching the audio (pitch unchanged)
+    verified_at: float = 0     # when a test phrase was last spoken successfully with this key and voice
+    verify_error: str = ""     # why the last test failed ("" when it passed or never ran)
+
+    @field_validator("speed")
+    @classmethod
+    def _speed(cls, x: float) -> float:
+        return clamp_speed(x)
 
 
 class Settings(BaseModel):
