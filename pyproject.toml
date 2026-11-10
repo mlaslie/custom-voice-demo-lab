@@ -1,6 +1,6 @@
 [project]
 name = "demolab"
-version = "0.1.0"
+version = "0.1.1"
 description = "Voice Demo Lab: narrated demo videos of web apps and slide decks in your custom Gemini TTS voice."
 requires-python = ">=3.12"
 dependencies = [
