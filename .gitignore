@@ -11,3 +11,4 @@ web/dist/
 /renders/
 .claude/
 *.tsbuildinfo
+/demos/

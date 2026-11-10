@@ -23,8 +23,9 @@ review in the browser.
 - macOS or Linux with [uv](https://docs.astral.sh/uv/) and `ffmpeg` (`brew install uv ffmpeg`)
 - A Gemini API key **from the AI Studio project that owns your custom voice**. Custom voices are scoped
   to the project that created them, so a key from another project gets a 404.
-- Optional: LibreOffice (`brew install --cask libreoffice`) for slide *images* from .pptx files.
-  Without it, PowerPoint decks give text and speaker notes only (or upload the deck's PDF export).
+- For slide *images* from .pptx files: LibreOffice (`brew install --cask libreoffice`) or, on macOS, Keynote
+  (it asks once for permission to be controlled). Without either, PowerPoint decks give text and speaker
+  notes only (or upload the deck's PDF export).
 - Optional: a Google OAuth client for Google Slides, set up as described in [docs/google-oauth.md](docs/google-oauth.md).
 
 The first launch installs the Python environment (`~/.demolab/venv`) and Playwright's Chromium.

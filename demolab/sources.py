@@ -11,6 +11,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
 from PIL import Image
@@ -103,17 +104,32 @@ def add_pptx(p: Project, path: pathlib.Path, label: str = "") -> Source:
         _add_slides(p, imgs, src)
     else:
         src.slide_offset = len(p.slides)
-        src.label += " (text only: install LibreOffice, or add the deck's PDF export, for slide images)"
+        src.label += " (text only: install LibreOffice or Keynote, or add the deck's PDF export, for slide images)"
     src.text = _slides_digest(texts, notes, src.slide_offset)
     return src
 
 
+KEYNOTE_EXPORT = """on run argv
+  tell application "Keynote"
+    set d to open POSIX file (item 1 of argv)
+    export d to POSIX file (item 2 of argv) as PDF
+    close d saving no
+  end tell
+end run"""
+
+
 def _pptx_to_pdf(path: pathlib.Path) -> pathlib.Path | None:
+    """Slide images need a PDF: LibreOffice if installed, else Keynote on macOS (asks once for permission)."""
     soffice = shutil.which("soffice") or next(
         (x for x in ["/Applications/LibreOffice.app/Contents/MacOS/soffice"] if os.path.exists(x)), None)
-    if not soffice:
-        return None
     out = pathlib.Path(tempfile.mkdtemp(prefix="demolab-pptx-"))
+    if not soffice:
+        if sys.platform != "darwin" or not os.path.exists("/Applications/Keynote.app"):
+            return None
+        pdf = out / (path.stem + ".pdf")
+        r = subprocess.run(["osascript", "-e", KEYNOTE_EXPORT, str(path.resolve()), str(pdf)],
+                           capture_output=True, text=True, timeout=300)
+        return pdf if r.returncode == 0 and pdf.exists() else None
     subprocess.run([soffice, "--headless", "--convert-to", "pdf", "--outdir", str(out), str(path)],
                    check=True, capture_output=True, timeout=300)
     pdfs = list(out.glob("*.pdf"))
