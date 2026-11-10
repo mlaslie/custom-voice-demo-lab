@@ -53,22 +53,39 @@ export function JobStatus({ job, compact }: { job: Job | null; compact?: boolean
   );
 }
 
+let playing: { audio: HTMLAudioElement; stopped: () => void } | null = null;
+
+/** Play a clip, stopping any other clip first, so two buttons never talk over each other.
+ *  `ended` runs when it finishes, is paused, or is cut off by another clip. */
+export function playClip(blob: Blob, ended: () => void): HTMLAudioElement {
+  stopClip();
+  const audio = new Audio(URL.createObjectURL(blob));
+  const done = () => { if (playing?.audio === audio) playing = null; URL.revokeObjectURL(audio.src); ended(); };
+  audio.onended = done;
+  playing = { audio, stopped: done };
+  audio.play().catch(done);
+  return audio;
+}
+
+export function stopClip() {
+  const p = playing;
+  if (p) { p.audio.pause(); p.stopped(); }
+}
+
 /** Speak text in a project's voice (else the active profile), a saved profile, or any voice of a saved key. */
 export function VoiceButton({ text, projectId, with: w, label = "Preview", title = "Hear it in this voice" }:
   { text: string; projectId?: string; with?: PreviewWith; label?: string; title?: string }) {
   const [state, setState] = useState<"idle" | "loading" | "playing">("idle");
   const [err, setErr] = useState("");
   const audio = useRef<HTMLAudioElement | null>(null);
+  useEffect(() => () => { if (audio.current && !audio.current.paused) stopClip(); }, []);
 
   const play = async () => {
-    if (state === "playing") { audio.current?.pause(); setState("idle"); return; }
+    if (state === "playing") { stopClip(); return; }
     setErr(""); setState("loading");
     try {
       const blob = await api.preview(text, { project_id: projectId, ...w });
-      const a = new Audio(URL.createObjectURL(blob));
-      audio.current = a;
-      a.onended = () => setState("idle");
-      await a.play();
+      audio.current = playClip(blob, () => setState("idle"));
       setState("playing");
     } catch (e) { setErr((e as Error).message); setState("idle"); }
   };

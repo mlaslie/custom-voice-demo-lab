@@ -17,7 +17,7 @@ from .models import Project, Segment
 STATIC = pathlib.Path(__file__).parent / "static"
 ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
 
-app = FastAPI(title="Voice Demo Lab", version="0.3.2")
+app = FastAPI(title="Voice Demo Lab", version="0.3.3")
 
 
 @app.middleware("http")

@@ -1,6 +1,7 @@
 import { Gauge, Loader2, Minus, Pause, Play, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, type PreviewWith } from "../api";
+import { playClip, stopClip } from "./hooks";
 
 export const PACE_SAMPLE = "Here is how this pace sounds in a real demo. First we open the dashboard and pick a project. " +
   "Then we run the policy check, and a few seconds later the results appear, each finding linked to its source.";
@@ -16,19 +17,16 @@ export function PacingControl({ value, onChange, with: w, text = PACE_SAMPLE, la
   const [result, setResult] = useState<{ seconds: number; wpm: number; speed: number } | null>(null);
   const [err, setErr] = useState("");
   const audio = useRef<HTMLAudioElement | null>(null);
-  useEffect(() => () => audio.current?.pause(), []);
+  useEffect(() => () => { if (audio.current && !audio.current.paused) stopClip(); }, []);
 
   const step = (d: number) => onChange(fix(value + d * STEP));
   const test = async () => {
-    if (state === "playing") { audio.current?.pause(); setState("idle"); return; }
+    if (state === "playing") { stopClip(); return; }
     setErr(""); setState("loading");
     try {
       const r = await api.testClip(text, { ...w, speed: value });
       setResult({ seconds: r.seconds, wpm: r.wpm, speed: value });
-      const a = new Audio(URL.createObjectURL(r.blob));
-      audio.current = a;
-      a.onended = () => setState("idle");
-      await a.play();
+      audio.current = playClip(r.blob, () => setState("idle"));
       setState("playing");
     } catch (e) { setErr((e as Error).message); setState("idle"); }
   };

@@ -2,8 +2,6 @@ import { KeyRound, Lock, Mic, Plus, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type Settings } from "../api";
-import { VoiceButton } from "../components/hooks";
-import { SAMPLE } from "../components/VoicePicker";
 import { VerifyStatus } from "../components/VerifyStatus";
 import { PacingControl } from "../components/PacingControl";
 import { Alert, Badge, Button, Field } from "../components/ui";
@@ -72,7 +70,6 @@ export default function SettingsPage({ onChange }: { onChange: (s: Settings) => 
                   {v.verify_error && <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">{v.verify_error}</p>}
                 </div>
                 <div className="flex items-center gap-1 sm:pt-1">
-                  <VoiceButton text={SAMPLE} with={{ profile_id: v.id }} label="Sample" />
                   <Button size="sm" variant="danger" title="Delete this voice"
                     onClick={() => confirm(`Delete the voice "${v.name}"?`) && run("del", async () => update(await api.deleteProfile(v.id)))}><Trash2 className="size-4" /></Button>
                 </div>

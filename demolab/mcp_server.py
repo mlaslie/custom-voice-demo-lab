@@ -18,7 +18,7 @@ from . import client
 
 READ = ToolAnnotations(readOnlyHint=True)
 
-mcp = MCPServer("voice-demo-lab", version="0.3.2", instructions=(
+mcp = MCPServer("voice-demo-lab", version="0.3.3", instructions=(
     "Voice Demo Lab turns what this coding session analyzed (code, slides, a running app) into a narrated "
     "demo video, in the user's custom or a standard Gemini TTS voice. YOU write the script from the session; "
     "the plugin checks it, voices it and renders it. Flow: get_settings (if setup_needed: "
