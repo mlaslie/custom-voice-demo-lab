@@ -1,6 +1,6 @@
 {
   "name": "custom-voice-demo-lab",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Narrated demo videos of web apps and slide decks in your custom Gemini TTS voice: draft the script from slides, code or notes, review and approve it in a local web app, then render.",
   "author": { "name": "Matthew Laslie" },
   "repository": "https://github.com/mlaslie/custom-voice-demo-lab",

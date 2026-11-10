@@ -98,42 +98,72 @@ def add_pptx(p: Project, path: pathlib.Path, label: str = "") -> Source:
                 parts += [" | ".join(c.text for c in row.cells) for row in shp.table.rows]
         texts.append("\n".join(parts))
         notes.append(slide.notes_slide.notes_text_frame.text if slide.has_notes_slide else "")
-    pdf = _pptx_to_pdf(path)
+    pdf, why = _pptx_to_pdf(path)
     if pdf:
         imgs, _ = _render_pdf(pdf)
         _add_slides(p, imgs, src)
     else:
         src.slide_offset = len(p.slides)
-        src.label += " (text only: install LibreOffice or Keynote, or add the deck's PDF export, for slide images)"
+        src.label += f" (text only, no slide images: {why})"
     src.text = _slides_digest(texts, notes, src.slide_offset)
     return src
 
 
 KEYNOTE_EXPORT = """on run argv
-  tell application "Keynote"
-    set d to open POSIX file (item 1 of argv)
-    export d to POSIX file (item 2 of argv) as PDF
-    close d saving no
-  end tell
+  with timeout of 90 seconds
+    tell application "Keynote"
+      set d to open POSIX file (item 1 of argv)
+      export d to POSIX file (item 2 of argv) as PDF
+      close d saving no
+    end tell
+  end timeout
 end run"""
+EXPORT_TIMEOUT = 120
+NO_CONVERTER = "install LibreOffice or Keynote, or add the deck's PDF export"
 
 
-def _pptx_to_pdf(path: pathlib.Path) -> pathlib.Path | None:
-    """Slide images need a PDF: LibreOffice if installed, else Keynote on macOS (asks once for permission)."""
+def _keynote_error(stderr: str) -> str:
+    """Turn an osascript failure into something the user can act on."""
+    if "-1743" in stderr or "Not authorized" in stderr:
+        return ("macOS blocked control of Keynote. Allow it under System Settings > Privacy & Security > "
+                "Automation, then add the deck again")
+    if "-1712" in stderr or "timed out" in stderr:
+        return ("Keynote didn't respond. Check Keynote or your screen for an open dialog (such as a "
+                "permission prompt or an import warning), close it, then add the deck again")
+    if "-600" in stderr or "isn't running" in stderr:
+        return "Keynote couldn't be started. Open Keynote once, then add the deck again"
+    msg = re.sub(r"^(\d+:\d+: )?execution error: ", "", stderr.strip().splitlines()[-1] if stderr.strip() else "")
+    return f"Keynote export failed: {msg or 'no error message'}. Or add the deck's PDF export"
+
+
+def _pptx_to_pdf(path: pathlib.Path) -> tuple[pathlib.Path | None, str]:
+    """Slide images need a PDF: LibreOffice if installed, else Keynote on macOS (asks once for permission).
+    Returns (pdf, "") or (None, why it could not be made)."""
     soffice = shutil.which("soffice") or next(
         (x for x in ["/Applications/LibreOffice.app/Contents/MacOS/soffice"] if os.path.exists(x)), None)
     out = pathlib.Path(tempfile.mkdtemp(prefix="demolab-pptx-"))
-    if not soffice:
-        if sys.platform != "darwin" or not os.path.exists("/Applications/Keynote.app"):
-            return None
-        pdf = out / (path.stem + ".pdf")
+    if soffice:
+        try:
+            r = subprocess.run([soffice, "--headless", "--convert-to", "pdf", "--outdir", str(out), str(path)],
+                               capture_output=True, text=True, timeout=EXPORT_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            return None, "LibreOffice took too long to convert the deck. Or add the deck's PDF export"
+        pdfs = list(out.glob("*.pdf"))
+        if pdfs:
+            return pdfs[0], ""
+        detail = (r.stderr or r.stdout).strip().splitlines()[-1:] or ["no error message"]
+        return None, f"LibreOffice could not convert the deck: {detail[0]}. Or add the deck's PDF export"
+    if sys.platform != "darwin" or not os.path.exists("/Applications/Keynote.app"):
+        return None, NO_CONVERTER
+    pdf = out / (path.stem + ".pdf")
+    try:
         r = subprocess.run(["osascript", "-e", KEYNOTE_EXPORT, str(path.resolve()), str(pdf)],
-                           capture_output=True, text=True, timeout=300)
-        return pdf if r.returncode == 0 and pdf.exists() else None
-    subprocess.run([soffice, "--headless", "--convert-to", "pdf", "--outdir", str(out), str(path)],
-                   check=True, capture_output=True, timeout=300)
-    pdfs = list(out.glob("*.pdf"))
-    return pdfs[0] if pdfs else None
+                           capture_output=True, text=True, timeout=EXPORT_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return None, _keynote_error("timed out")
+    if r.returncode == 0 and pdf.exists():
+        return pdf, ""
+    return None, _keynote_error(r.stderr)
 
 
 def gslides_id(ref: str) -> str:

@@ -16,7 +16,7 @@ from . import client
 
 READ = ToolAnnotations(readOnlyHint=True)
 
-mcp = MCPServer("voice-demo-lab", version="0.1.3", instructions=(
+mcp = MCPServer("voice-demo-lab", version="0.1.4", instructions=(
     "Voice Demo Lab makes narrated demo videos (custom Gemini TTS voice) of web apps and slide decks. "
     "Flow: create_project -> add_session_context (when the request comes out of a working session) -> "
     "add_source (url/repo/pptx/pdf/gslides/text) -> draft_script (or set_segments) "
