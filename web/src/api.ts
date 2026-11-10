@@ -97,9 +97,7 @@ export interface Settings {
   key_source: "env" | "keychain";
   tts_model: string;
   output_dir: string;
-  google_client_secret: string;
   audience: string;
-  google_connected: boolean;
   fake_gemini: boolean;
 }
 
@@ -142,9 +140,6 @@ export const api = {
   patchProfile: (id: string, b: Partial<VoiceProfile>) => req<Settings>("PATCH", `/api/profiles/${id}`, b),
   deleteProfile: (id: string) => req<Settings>("DELETE", `/api/profiles/${id}`),
   activateProfile: (id: string) => req<Settings>("POST", `/api/profiles/${id}/activate`),
-  googleConnect: () => req<{ state: string }>("POST", "/api/google/connect"),
-  googleStatus: () => req<{ state: string; error: string; connected: boolean }>("GET", "/api/google/status"),
-  googleDisconnect: () => req("DELETE", "/api/google"),
 
   projects: () => req<ProjectSummary[]>("GET", "/api/projects"),
   project: (id: string) => req<Project>("GET", `/api/projects/${id}`),

@@ -1,6 +1,6 @@
 [project]
 name = "demolab"
-version = "0.3.0"
+version = "0.3.1"
 description = "Voice Demo Lab: narrated demo videos of web apps and slide decks in your custom Gemini TTS voice."
 requires-python = ">=3.12"
 dependencies = [
@@ -15,8 +15,6 @@ dependencies = [
   "pypdfium2>=4.30",
   "keyring>=25",
   "mcp>=1.2",
-  "google-auth-oauthlib>=1.2",
-  "google-api-python-client>=2.150",
 ]
 
 [project.scripts]

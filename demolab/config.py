@@ -1,4 +1,4 @@
-"""Settings (voice profiles, models, folders) and secrets (API keys, Google token).
+"""Settings (voice profiles, models, folders) and secrets (API keys).
 
 Settings live in ~/.demolab/settings.json (override the folder with $DEMOLAB_HOME). A voice profile pairs a
 saved Gemini API key with a voice (one of the key's custom voices, or a standard voice) and a delivery style;
@@ -59,8 +59,6 @@ class Settings(BaseModel):
     tts_model: str = "gemini-3.8-flash-tts"
     # Renders can be large; point this at an external drive if you have one.
     output_dir: str = str(HOME / "renders")
-    # Path to a Google OAuth "Desktop app" client_secret.json (needed for Google Slides only).
-    google_client_secret: str = ""
     audience: str = "slightly or not at all familiar with the product; full but high-level explanations"
     # Before voice profiles: one voice id and the "gemini_api_key" secret. Migrated on load.
     voice_id: str = Field(default="", exclude=True)
@@ -252,7 +250,6 @@ def public_settings() -> dict:
             # kept for older clients
             "voice_id": active.voice if active else "",
             "gemini_key_set": bool(s.keys) or bool(env_key()),
-            "google_connected": has_secret("google_token"),
             "fake_gemini": fake_gemini()}
 
 

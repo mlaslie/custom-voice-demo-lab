@@ -44,3 +44,10 @@ def test_no_converter(tmp_path, monkeypatch):
     monkeypatch.setattr(sources.sys, "platform", "linux")
     monkeypatch.setattr(sources.os.path, "exists", lambda x: False)
     assert sources._pptx_to_pdf(tmp_path / "d.pptx") == (None, sources.NO_CONVERTER)
+
+
+def test_google_slides_links_ask_for_an_export():
+    import pytest
+    from demolab.models import Project
+    with pytest.raises(ValueError, match="export the deck as a PDF or .pptx"):
+        sources.add_deck(Project(name="t"), "https://docs.google.com/presentation/d/abc123/edit")

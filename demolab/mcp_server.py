@@ -18,7 +18,7 @@ from . import client
 
 READ = ToolAnnotations(readOnlyHint=True)
 
-mcp = MCPServer("voice-demo-lab", version="0.3.0", instructions=(
+mcp = MCPServer("voice-demo-lab", version="0.3.1", instructions=(
     "Voice Demo Lab turns what this coding session analyzed (code, slides, a running app) into a narrated "
     "demo video, in the user's custom or a standard Gemini TTS voice. YOU write the script from the session; "
     "the plugin checks it, voices it and renders it. Flow: get_settings (if setup_needed: "
@@ -36,7 +36,7 @@ def _decks(p: dict) -> list[dict]:
     """Each deck with its slides' text and speaker notes, so the script can say what each slide means."""
     return [{"label": s["label"], "slides": f"{s['slide_offset']}..{s['slide_offset'] + s['slide_count'] - 1}"
              if s["slide_count"] else "none (text only)", "content": s["text"][:12000]}
-            for s in p["sources"] if s["kind"] in ("pptx", "pdf", "gslides")]
+            for s in p["sources"] if s["kind"] in ("pptx", "pdf", "gslides")]   # gslides: older projects
 
 
 def _summary(p: dict, decks: bool = False) -> dict:
@@ -82,7 +82,7 @@ def get_settings() -> dict:
     the keys), models, output folder and Google sign-in."""
     st = client.call("GET", "/api/settings")
     return {**{k: st[k] for k in ("setup_needed", "tts_model", "output_dir", "audience",
-                                  "google_connected", "fake_gemini")},
+                                  "fake_gemini")},
             "setup_url": f"{client.BASE}/setup",
             "active_profile": _profile(st["active"]) if st["active"] else None,
             "profiles": [_profile(v) for v in st["profiles"]],
@@ -95,10 +95,10 @@ def _profile(v: dict) -> dict:
 
 @mcp.tool()
 def update_settings(tts_model: str | None = None, output_dir: str | None = None,
-                    google_client_secret: str | None = None, audience: str | None = None) -> dict:
+                    audience: str | None = None) -> dict:
     """Change non-secret settings. Keys and voices are managed by the user on the setup/settings pages."""
     body = {k: v for k, v in dict(tts_model=tts_model, output_dir=output_dir,
-                                  google_client_secret=google_client_secret, audience=audience).items()
+                                  audience=audience).items()
             if v is not None}
     client.call("PUT", "/api/settings", json=body)
     return get_settings()
@@ -153,7 +153,8 @@ def start_demo(title: str, goal: str, brief: str, audience: str = "", instructio
       matters, decisions, what is unfinished or must not be shown. Shown to the user beside the script.
     - audience: who will watch (default: new to the subject).  instructions: tone, length, emphasis.
     - base_url: the running app to record, for live web steps (empty for slides-only videos).
-    - decks: the slide decks the session used: .pptx or .pdf paths, or Google Slides links. Their slides
+    - decks: the slide decks the session used, as local .pptx or .pdf paths (export a Google Slides deck to
+      one of these with your own Google Drive / Slides tools first). Their slides
       become images for slide segments; the result lists each slide's text and speaker notes.
     - voice_profile: a saved profile's name or id (default: the active one)."""
     st = client.call("GET", "/api/settings")

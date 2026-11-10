@@ -1,4 +1,4 @@
-import { KeyRound, Lock, LogIn, LogOut, Mic, Plus, Save, Trash2 } from "lucide-react";
+import { KeyRound, Lock, Mic, Plus, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type Settings } from "../api";
@@ -11,21 +11,15 @@ export default function SettingsPage({ onChange }: { onChange: (s: Settings) => 
   const [models, setModels] = useState<string[]>([]);
   const [msg, setMsg] = useState<{ tone: "red" | "blue"; text: string } | null>(null);
   const [busy, setBusy] = useState("");
-  const [google, setGoogle] = useState<{ state: string; error: string; connected: boolean } | null>(null);
   const [adding, setAdding] = useState(false);
   const [keyName, setKeyName] = useState("");
   const [secret, setSecret] = useState("");
 
   const update = (n: Settings) => { setS(n); onChange(n); };
-  useEffect(() => { api.settings().then(update); api.googleStatus().then(setGoogle).catch(() => {}); }, []);
+  useEffect(() => { api.settings().then(update); }, []);
   useEffect(() => {
     if (s && !s.setup_needed) api.models().then((m) => setModels(m.filter((x) => x.methods.includes("generateContent")).map((x) => x.name))).catch(() => {});
   }, [s?.setup_needed]);   // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (google?.state !== "waiting") return;
-    const t = setTimeout(() => api.googleStatus().then((g) => { setGoogle(g); if (g.connected) api.settings().then(update); }), 1500);
-    return () => clearTimeout(t);
-  }, [google]);
 
   if (!s) return null;
   const set = (k: keyof Settings) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setS({ ...s, [k]: e.target.value });
@@ -130,27 +124,6 @@ export default function SettingsPage({ onChange }: { onChange: (s: Settings) => 
         <Field label="Text-to-speech model" hint="Your coding agent writes the scripts; this Gemini model only speaks them."><input className="input font-mono" value={s.tts_model} onChange={set("tts_model")} list="models" /></Field>
         <datalist id="models">{models.map((m) => <option key={m} value={m} />)}</datalist>
         <Field label="Default audience" hint="Shapes how much the script explains."><textarea className="input min-h-16" value={s.audience} onChange={set("audience")} /></Field>
-      </section>
-
-      <section className="card space-y-4 p-5">
-        <h2 className="flex items-center gap-2 font-semibold">Google Slides
-          {s.google_connected ? <Badge tone="green">connected</Badge> : <Badge>not connected</Badge>}
-        </h2>
-        <Field label="OAuth client secret file" hint={<>A "Desktop app" OAuth client with the Slides and Drive APIs enabled. See docs/google-oauth.md.</>}>
-          <input className="input font-mono" value={s.google_client_secret} onChange={set("google_client_secret")} placeholder="~/.demolab/client_secret.json" />
-        </Field>
-        <div className="flex flex-wrap items-center gap-2">
-          {s.google_connected ? (
-            <Button icon={<LogOut className="size-4" />} onClick={() => run("g", async () => { await api.googleDisconnect(); update(await api.settings()); })}>Disconnect</Button>
-          ) : (
-            <Button icon={<LogIn className="size-4" />} busy={google?.state === "waiting"} disabled={!s.google_client_secret}
-              onClick={() => run("g", async () => { await api.saveSettings(s); await api.googleConnect(); setGoogle({ state: "waiting", error: "", connected: false }); })}>
-              Connect Google
-            </Button>
-          )}
-          {google?.state === "waiting" && <span className="text-sm text-zinc-500">Finish signing in in the browser tab that opened…</span>}
-          {google?.state === "error" && <span className="text-sm text-red-600">{google.error}</span>}
-        </div>
       </section>
 
       <section className="card space-y-4 p-5">

@@ -4,7 +4,6 @@ from __future__ import annotations
 import pathlib
 import subprocess
 import sys
-import threading
 from urllib.parse import urljoin
 
 from fastapi import Body, FastAPI, HTTPException, Request
@@ -12,13 +11,13 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import browser, config, gemini, google_auth, jobs, pipeline, script, sources, store
+from . import browser, config, gemini, jobs, pipeline, script, sources, store
 from .models import Project, Segment
 
 STATIC = pathlib.Path(__file__).parent / "static"
 ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
 
-app = FastAPI(title="Voice Demo Lab", version="0.3.0")
+app = FastAPI(title="Voice Demo Lab", version="0.3.1")
 
 
 @app.middleware("http")
@@ -76,7 +75,6 @@ def get_settings():
 class SettingsIn(BaseModel):
     tts_model: str | None = None
     output_dir: str | None = None
-    google_client_secret: str | None = None
     audience: str | None = None
 
 
@@ -213,34 +211,6 @@ def voice_preview(v: PreviewIn):
                                          v.style), media_type="audio/wav")
 
 
-_google = {"state": "idle", "error": ""}
-
-
-@app.post("/api/google/connect")
-def google_connect():
-    def run():
-        _google.update(state="waiting", error="")
-        try:
-            google_auth.connect()
-            _google["state"] = "connected"
-        except Exception as e:
-            _google.update(state="error", error=str(e))
-    threading.Thread(target=run, daemon=True).start()
-    return _google
-
-
-@app.get("/api/google/status")
-def google_status():
-    return {**_google, "connected": config.has_secret("google_token")}
-
-
-@app.delete("/api/google")
-def google_disconnect():
-    google_auth.disconnect()
-    _google.update(state="idle", error="")
-    return {"connected": False}
-
-
 # ---- projects -----------------------------------------------------------------------------------
 
 class ProjectIn(BaseModel):
@@ -297,7 +267,7 @@ def delete_project(pid: str):
 # ---- decks --------------------------------------------------------------------------------------
 
 class DeckIn(BaseModel):
-    ref: str             # a .pptx / .pdf path, or a Google Slides URL or id
+    ref: str             # a .pptx or .pdf path
     label: str = ""
 
 

@@ -32,8 +32,11 @@ text-to-speech voices it and the video is rendered. Gemini does not write the sc
    - `brief`: what this session established, in your own words: what was analyzed or built, how it works,
      what matters, decisions and why, what is unfinished or must not be shown. The user sees it beside the
      script.
-   - `decks`: every slide deck the session used (.pptx or .pdf paths, Google Slides links). Their slides
-     become the video's slide images; the result lists each slide's text and speaker notes.
+   - `decks`: every slide deck the session used, as local .pptx or .pdf files. Their slides become the
+     video's slide images; the result lists each slide's text and speaker notes. For a Google Slides deck
+     (read with your Google Drive or Slides tools), export or download it as a PDF or .pptx file with those
+     same tools and pass that path; if your tools cannot export, ask the user to use File > Download in
+     Google Slides and tell you where the file is.
    - `base_url`: the running app to record, if the video shows a live app (empty for slides only).
 
 4. **Open the studio beside the chat** right away, at the returned `studio_url`. In the Claude desktop

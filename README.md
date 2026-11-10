@@ -7,7 +7,8 @@ Analyze some code, a running app or a slide deck with your agent, then ask it fo
 
 1. **The session writes the script.** The agent that did the analysis writes the narration itself,
    following the plugin's guide (format, house style, writing for the ear). The plugin checks it. Decks
-   the session used become the video's slides; a running app is recorded live, with click steps the agent
+   the session used (.pptx or .pdf files; the agent exports Google Slides decks with its own Google
+   tools) become the video's slides; a running app is recorded live, with click steps the agent
    writes from the code and checks against the real page.
 2. **You review it beside the chat.** The studio opens in the session's side panel: edit any line, hear it
    in the voice, and approve. Or ask the agent for changes in the chat.
@@ -26,8 +27,7 @@ It runs locally as a small web app (the studio) plus an MCP server, packaged as 
   to the project that created them, so a key from another project gets a 404.
 - For slide *images* from .pptx files: LibreOffice (`brew install --cask libreoffice`) or, on macOS, Keynote
   (it asks once for permission to be controlled). Without either, PowerPoint decks give text and speaker
-  notes only (or upload the deck's PDF export).
-- Optional: a Google OAuth client for Google Slides, set up as described in [docs/google-oauth.md](docs/google-oauth.md).
+  notes only (or pass the deck's PDF export).
 
 The first launch installs the Python environment (`~/.demolab/venv`) and Playwright's Chromium.
 
