@@ -90,7 +90,8 @@ when you say so.
 | `.antigravity-plugin/`, `mcp_config.json` | Antigravity plugin |
 | `scripts/launch.sh` | Plugin entry point (`mcp`, `serve`, `open`, `setup`) |
 
-Data lives in `~/.demolab/` (override with `$DEMOLAB_HOME`). Each project's sources, slides, narration
+The service uses port 8765 (`$DEMOLAB_PORT`); if another program holds it, it picks a free port and records
+it in `~/.demolab/port`. Data lives in `~/.demolab/` (override with `$DEMOLAB_HOME`). Each project's sources, slides, narration
 cache and dry-run screenshots live in `projects/<id>/`.
 
 ## Development

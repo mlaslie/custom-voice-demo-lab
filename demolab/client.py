@@ -1,6 +1,12 @@
-"""Talk to the local service, starting it in the background if it is not running."""
+"""Talk to the local service, starting it in the background if it is not running.
+
+The service listens on $DEMOLAB_PORT (default 8765). If another program already holds that port, it starts
+on a free one instead and records it in ~/.demolab/port, so every MCP server and `demolab open` finds it.
+"""
 from __future__ import annotations
 
+import os
+import socket
 import subprocess
 import sys
 import time
@@ -9,7 +15,31 @@ import httpx
 
 from . import config
 
-BASE = f"http://127.0.0.1:{config.PORT}"
+PORT_FILE = config.HOME / "port"
+
+
+def _saved_port() -> int:
+    if "DEMOLAB_PORT" not in os.environ:
+        try:
+            return int(PORT_FILE.read_text().strip())
+        except (OSError, ValueError):
+            pass
+    return config.PORT
+
+
+BASE = f"http://127.0.0.1:{_saved_port()}"
+
+
+def _in_use(port: int) -> bool:
+    with socket.socket() as sk:
+        sk.settimeout(0.5)
+        return sk.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _free_port() -> int:
+    with socket.socket() as sk:
+        sk.bind(("127.0.0.1", 0))
+        return sk.getsockname()[1]
 
 
 def running() -> bool:
@@ -20,15 +50,30 @@ def running() -> bool:
 
 
 def ensure_server(timeout: float = 30) -> str:
+    global BASE
     if running():
         return BASE
+    for port in dict.fromkeys([_saved_port(), config.PORT]):   # a service may already run on either
+        BASE = f"http://127.0.0.1:{port}"
+        if running():
+            return BASE
+    port = config.PORT
+    if _in_use(port):
+        if "DEMOLAB_PORT" in os.environ:
+            raise RuntimeError(f"Port {port} (DEMOLAB_PORT) is in use by another program.")
+        port = _free_port()
+    BASE = f"http://127.0.0.1:{port}"
     config.HOME.mkdir(parents=True, exist_ok=True)
     log = open(config.HOME / "server.log", "ab")
-    subprocess.Popen([sys.executable, "-m", "demolab", "serve"], stdout=log, stderr=log,
+    subprocess.Popen([sys.executable, "-m", "demolab", "serve", "--port", str(port)], stdout=log, stderr=log,
                      stdin=subprocess.DEVNULL, start_new_session=True)
     t0 = time.time()
     while time.time() - t0 < timeout:
         if running():
+            if port == config.PORT:
+                PORT_FILE.unlink(missing_ok=True)
+            else:
+                PORT_FILE.write_text(str(port))
             return BASE
         time.sleep(0.4)
     raise RuntimeError(f"The Voice Demo Lab service did not start; see {config.HOME / 'server.log'}")
