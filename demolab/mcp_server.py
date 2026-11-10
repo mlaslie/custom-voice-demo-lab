@@ -16,11 +16,12 @@ from . import client
 
 READ = ToolAnnotations(readOnlyHint=True)
 
-mcp = MCPServer("voice-demo-lab", version="0.1.2", instructions=(
+mcp = MCPServer("voice-demo-lab", version="0.1.3", instructions=(
     "Voice Demo Lab makes narrated demo videos (custom Gemini TTS voice) of web apps and slide decks. "
     "Flow: create_project -> add_session_context (when the request comes out of a working session) -> "
     "add_source (url/repo/pptx/pdf/gslides/text) -> draft_script (or set_segments) "
-    "-> the user reviews in the web app (open_studio) -> approve_script ONLY when the user says so -> "
+    "-> the user reviews in the web app (open_studio(open_browser=false), then show the URL in your host's "
+    "side panel / built-in browser if it has one; open it as soon as the project exists) -> approve_script ONLY when the user says so -> "
     "plan_actions + dry_run for web steps -> render. Never ask for or handle the Gemini API key: tell the "
     "user to add it in the web app's Settings."))
 
@@ -46,8 +47,11 @@ def _job(j: dict) -> dict:
 
 @mcp.tool()
 def open_studio(project_id: str = "", open_browser: bool = True) -> str:
-    """Start the Voice Demo Lab web app (if needed) and return its URL; opens it in the browser by default.
-    Use it so the user can review/edit the script, preview the voice, and manage Settings (voice id, key)."""
+    """Start the Voice Demo Lab web app (if needed) and return its URL, so the user can review and edit the
+    script, preview the voice, and manage Settings (voice id, key).
+    If your host has a built-in browser or preview pane beside the chat (the Claude desktop app's browser
+    pane, Antigravity's browser), pass open_browser=false and open the returned URL there yourself, so the
+    studio sits beside the conversation. With open_browser=true it opens in the system browser instead."""
     base = client.ensure_server()
     url = f"{base}/projects/{project_id}" if project_id else base
     if open_browser:

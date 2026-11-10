@@ -22,6 +22,12 @@ projects, so you can work through the tools while the user reviews in the browse
 2. **Create the project**: `create_project(name, base_url, goal, instructions)`. `base_url` is the web
    app to demo (leave it empty for slides-only). Put the user's wishes for tone, length and emphasis in
    `instructions`.
+   **Then open the studio in a side panel right away**, so the user watches the project fill in beside the
+   chat: call `open_studio(project_id, open_browser=false)` and open the returned URL in your host's
+   built-in browser pane. In the Claude desktop app, use the built-in browser (`preview_start` with `url`
+   set to the studio's address, then `navigate` to the project URL if it has a path). In Antigravity, use
+   its browser. Only when the host has no such pane, call `open_studio(project_id)` to use the system
+   browser. Keep that pane on the project and reload it after big changes (a new draft, a render).
 3. **Add session context first** when the demo is about work done or discussed in this conversation
    ("make a demo of this", "record what we just built"). Call `add_session_context` with what you know:
    the goal, what was built or changed, decisions and why, what to show and in what order, and caveats
@@ -44,8 +50,8 @@ projects, so you can work through the tools while the user reviews in the browse
    - `slide`: shows `slide` N while narrating
    - `step`: a web step, where `narration` plays, the actions run during or after it, then `after_narration`
      says how the result shows the step worked
-6. **Review**: summarise the script for the user (segment titles and narration) and give them the
-   `studio_url` (or call `open_studio(project_id)`) so they can edit it and listen to previews.
+6. **Review**: summarise the script for the user (segment titles and narration) and point them to the
+   studio in the side panel (or give them the `studio_url`) so they can edit it and listen to previews.
    **Only call `approve_script` when the user explicitly approves.**
 7. **Web steps**: if the app needs a login, call `capture_login`; the user signs in themselves in the
    window that opens. Then run `plan_actions` (Gemini explores the app and plans clicks for each step)
