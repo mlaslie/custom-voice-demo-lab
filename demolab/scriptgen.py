@@ -41,18 +41,28 @@ House style:
   inside narration. Expand acronyms on first use.
 - Slide decks: one slide segment per slide in order, unless the author asks otherwise; use speaker
   notes as the main source when present, and do not just read the slide text verbatim.
+- SESSION sources come from the author's own working session with a coding agent: what was built or
+  changed, why, and what to show. Build the story and its order from them, and use the other sources for
+  detail. Where they conflict, the session is newer and wins. Leave out anything it marks as not working
+  or not to be shown. Attached screenshots show the real UI.
 - Only describe UI that exists in the sources. Do not invent features or results."""
 
 
 def _sources_digest(p: Project, budget: int = 120_000) -> str:
     out = []
-    for s in p.sources:
-        head = f"### SOURCE [{s.kind}] {s.label}"
+    for s in sorted(p.sources, key=lambda s: s.kind != "session"):   # session context leads
+        head = f"### SOURCE [{s.kind.upper() if s.kind == 'session' else s.kind}] {s.label}"
         if s.slide_count:
             head += f" (slides {s.slide_offset}..{s.slide_offset + s.slide_count - 1})"
         out.append(f"{head}\n{s.text}")
     text = "\n\n".join(out)
     return text[:budget]
+
+
+def _session_images(p: Project, limit: int = 8) -> list[bytes]:
+    d = store.pdir(p.id) / "session"
+    names = [n for s in p.sources if s.kind == "session" for n in s.images][:limit]
+    return [(d / n).read_bytes() for n in names if (d / n).exists()]
 
 
 def _kind(p: Project) -> str:
@@ -76,7 +86,8 @@ def draft(job, pid: str) -> dict:
                   f"Goal: {p.goal or '(infer from the sources)'}\n"
                   f"Author instructions (override the house style): {p.instructions or '(none)'}\n\n"
                   f"SOURCES:\n{_sources_digest(p)}")
-        d = gemini.generate_json(prompt, SCRIPT_SCHEMA, st.script_model, system=SYSTEM)
+        d = gemini.generate_json(prompt, SCRIPT_SCHEMA, st.script_model, images=_session_images(p),
+                                 system=SYSTEM)
         segs = [_clean(Segment.model_validate(x), p) for x in d["segments"]]
     store.mutate(pid, lambda q: (setattr(q, "segments", segs), setattr(q, "script_approved", False)))
     return {"segments": len(segs)}

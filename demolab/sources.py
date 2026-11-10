@@ -20,6 +20,11 @@ from .models import Project, Source
 
 W, H = 1920, 1080
 REPO_BUDGET = 60_000
+SESSION_BUDGET = 60_000      # attached files of a session source
+SESSION_IMAGES = 8
+IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+SECRET_FILE = re.compile(r"(^\.env(\..*)?$|^client_secret.*|secrets?\.(json|ya?ml|toml)$|credentials.*\.json$"
+                         r"|\.(pem|key|p12|pfx|keystore)$|^id_(rsa|ed25519|ecdsa)$|^\.netrc$|token.*\.json$)", re.I)
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "dist", "build", "__pycache__", ".next", "target",
              ".idea", ".vscode", "coverage", ".turbo", "vendor"}
 TEXT_EXT = {".md", ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".java", ".kt", ".rb", ".rs", ".cs", ".php",
@@ -173,7 +178,8 @@ def add_repo(p: Project, path: str, label: str = "") -> Source:
         rel = pathlib.Path(dp).relative_to(root)
         if len(rel.parts) <= 3:
             tree += [str(rel / f) for f in sorted(fns)][:40]
-        files += [pathlib.Path(dp) / f for f in fns if pathlib.Path(f).suffix.lower() in TEXT_EXT]
+        files += [pathlib.Path(dp) / f for f in fns
+                  if pathlib.Path(f).suffix.lower() in TEXT_EXT and not SECRET_FILE.search(f)]
 
     def rank(f: pathlib.Path) -> tuple:
         n = f.name.lower()
@@ -204,6 +210,70 @@ def add_url(p: Project, url: str, label: str = "") -> Source:
     return Source(kind="url", label=label or snap["title"] or url, ref=url,
                   text=f"Page: {snap['title']} ({url})\n\nVisible text:\n{snap['text']}\n\n"
                        f"Interactive elements:\n{snap['elements']}")
+
+
+def add_session(p: Project, brief: str, files: list[str], label: str = "", workspace: str = "") -> Source:
+    """What the author's agent session knows: a brief it wrote, plus the files and folders it worked on.
+
+    Text files are inlined, folders get a short repo digest, decks give their text and notes (add the deck
+    as a file source to show its slides), and images are kept as screenshots for the script writer.
+    """
+    if not brief.strip() and not files:
+        raise ValueError("A session source needs a brief or at least one file.")
+    src = Source(kind="session", label=label or "Session context", ref=workspace)
+    base = pathlib.Path(workspace).expanduser() if workspace else None
+    chunks, skipped, budget = [], [], SESSION_BUDGET
+    img_dir = store.sub(p.id, "session")
+    for i, raw in enumerate(files):
+        f = pathlib.Path(raw).expanduser()
+        if not f.is_absolute() and base:
+            f = base / f
+        if SECRET_FILE.search(f.name):
+            skipped.append(f"{raw} (looks like a secret)")
+            continue
+        try:
+            if f.is_dir():
+                body = add_repo(p, str(f)).text[:max(0, min(budget, REPO_BUDGET // 3))]
+            elif f.suffix.lower() in IMAGE_EXT:
+                if len(src.images) >= SESSION_IMAGES:
+                    skipped.append(f"{raw} (image limit {SESSION_IMAGES})")
+                    continue
+                name = f"{src.id}_{i:02d}.jpg"
+                img = Image.open(f).convert("RGB")
+                img.thumbnail((1600, 1600))
+                img.save(img_dir / name, quality=85)
+                src.images.append(name)
+                src.files.append(raw)
+                chunks.append(f"\n\n=== {raw} ===\n[screenshot {len(src.images)} attached]")
+                continue
+            elif f.suffix.lower() == ".pdf":
+                body = "\n\n".join(_render_pdf(f)[1])
+            elif f.suffix.lower() == ".pptx":
+                from pptx import Presentation
+                body = "\n\n".join(sh.text_frame.text for sl in Presentation(str(f)).slides
+                                     for sh in sl.shapes if sh.has_text_frame)
+            elif f.suffix.lower() in TEXT_EXT or f.suffix.lower() in {".markdown", ".rst", ".csv", ".log", ""}:
+                body = f.read_text(errors="ignore")[:20_000]
+            else:
+                skipped.append(f"{raw} (unsupported type)")
+                continue
+        except (OSError, ValueError) as e:
+            skipped.append(f"{raw} ({e.__class__.__name__}: {e})")
+            continue
+        if budget <= 0:
+            skipped.append(f"{raw} (over the size budget)")
+            continue
+        chunk = f"\n\n=== {raw} ===\n{body}"[:budget]
+        chunks.append(chunk)
+        src.files.append(raw)
+        budget -= len(chunk)
+    src.text = brief.strip()
+    if chunks:
+        src.text += "\n\nATTACHED FILES:" + "".join(chunks)
+    if skipped:
+        src.label += f" ({len(skipped)} file{'s' if len(skipped) > 1 else ''} skipped)"
+        src.text += "\n\nNot read: " + "; ".join(skipped)
+    return src
 
 
 def add_upload(p: Project, filename: str, data: bytes, label: str = "") -> Source:

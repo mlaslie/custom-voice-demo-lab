@@ -174,10 +174,11 @@ def delete_project(pid: str):
 # ---- sources ------------------------------------------------------------------------------------
 
 class SourceIn(BaseModel):
-    kind: str            # url | repo | gslides | text
-    ref: str = ""
-    text: str = ""
+    kind: str            # url | repo | gslides | text | session
+    ref: str = ""        # session: the workspace folder relative file paths resolve against
+    text: str = ""       # text: the notes; session: the brief
     label: str = ""
+    files: list[str] = []   # session: files and folders to attach
 
 
 def _add(pid: str, fn) -> Project:
@@ -192,7 +193,8 @@ def add_source(pid: str, b: SourceIn):
     add = {"url": lambda p: sources.add_url(p, b.ref, b.label),
            "repo": lambda p: sources.add_repo(p, b.ref, b.label),
            "gslides": lambda p: sources.add_gslides(p, b.ref, b.label),
-           "text": lambda p: sources.add_text(p, b.label, b.text)}.get(b.kind)
+           "text": lambda p: sources.add_text(p, b.label, b.text),
+           "session": lambda p: sources.add_session(p, b.text, b.files, b.label, b.ref)}.get(b.kind)
     if not add:
         raise ValueError(f"Unknown source kind {b.kind}")
     return _add(pid, add)
@@ -213,6 +215,8 @@ def delete_source(pid: str, sid: str):
             (store.pdir(pid) / "slides" / name).unlink(missing_ok=True)
         del p.slides[lo:lo + n]
         p.sources.remove(src)
+        for name in src.images:
+            (store.pdir(pid) / "session" / name).unlink(missing_ok=True)
         for s in p.sources:
             if s.slide_offset >= lo + n and n:
                 s.slide_offset -= n

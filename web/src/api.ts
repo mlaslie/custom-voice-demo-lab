@@ -30,12 +30,14 @@ export interface Segment {
 
 export interface Source {
   id: string;
-  kind: "url" | "repo" | "pptx" | "pdf" | "gslides" | "text";
+  kind: "url" | "repo" | "pptx" | "pdf" | "gslides" | "text" | "session";
   label: string;
   ref: string;
   text: string;
   slide_count: number;
   slide_offset: number;
+  files: string[];
+  images: string[];
 }
 
 export interface Check { segment_id: string; index: number; ok: boolean; error: string; shot: string }
@@ -117,7 +119,7 @@ export const api = {
   patchProject: (id: string, b: Partial<Project>) => req<Project>("PATCH", `/api/projects/${id}`, b),
   deleteProject: (id: string) => req("DELETE", `/api/projects/${id}`),
 
-  addSource: (id: string, b: { kind: string; ref?: string; text?: string; label?: string }) =>
+  addSource: (id: string, b: { kind: string; ref?: string; text?: string; label?: string; files?: string[] }) =>
     req<Project>("POST", `/api/projects/${id}/sources`, b),
   upload: (id: string, file: File) => {
     const fd = new FormData();

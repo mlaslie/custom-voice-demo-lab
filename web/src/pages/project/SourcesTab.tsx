@@ -1,4 +1,4 @@
-import { FileCode2, FileText, Globe, Presentation, StickyNote, Trash2, Upload, Wand2 } from "lucide-react";
+import { FileCode2, FileText, Globe, MessagesSquare, Presentation, StickyNote, Trash2, Upload, Wand2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { api, slideUrl, type Source } from "../../api";
 import { useJob, JobStatus } from "../../components/hooks";
@@ -6,18 +6,20 @@ import { Alert, Badge, Button, Field } from "../../components/ui";
 import type { TabProps } from "../Project";
 
 const KINDS = [
+  { key: "session", label: "Session context", icon: MessagesSquare, placeholder: "", hint: "What your agent session knows: the goal, what was built and why, what to show, what to avoid. The script is built around it. Agents add this for you with add_session_context." },
   { key: "url", label: "Web page", icon: Globe, placeholder: "https://app.example.com/dashboard", hint: "Captures the page's text and controls (uses the saved login, if any)." },
   { key: "repo", label: "Source folder", icon: FileCode2, placeholder: "~/code/my-app", hint: "Reads the README, docs and the most relevant files." },
   { key: "gslides", label: "Google Slides", icon: Presentation, placeholder: "https://docs.google.com/presentation/d/…", hint: "Slides, speaker notes and slide images. Needs Google connected in Settings." },
   { key: "text", label: "Notes / script", icon: StickyNote, placeholder: "", hint: "Talking points, an existing script, anything the narration should cover." },
 ] as const;
 
-const ICON: Record<Source["kind"], typeof Globe> = { url: Globe, repo: FileCode2, gslides: Presentation, pptx: Presentation, pdf: FileText, text: StickyNote };
+const ICON: Record<Source["kind"], typeof Globe> = { url: Globe, repo: FileCode2, gslides: Presentation, pptx: Presentation, pdf: FileText, text: StickyNote, session: MessagesSquare };
 
 export default function SourcesTab({ project: p, setProject, refresh, goto }: TabProps) {
   const [kind, setKind] = useState<(typeof KINDS)[number]["key"]>(p.base_url && !p.sources.length ? "url" : "text");
   const [ref, setRef] = useState(p.base_url && !p.sources.length ? p.base_url : "");
   const [text, setText] = useState("");
+  const [paths, setPaths] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [drag, setDrag] = useState(false);
@@ -30,8 +32,9 @@ export default function SourcesTab({ project: p, setProject, refresh, goto }: Ta
     try { await fn(); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
   const add = () => act(async () => {
-    setProject(await api.addSource(p.id, { kind, ref: ref.trim(), text, label: kind === "text" ? "Notes" : "" }));
-    setRef(""); setText("");
+    const files = paths.split("\n").map((x) => x.trim()).filter(Boolean);
+    setProject(await api.addSource(p.id, { kind, ref: ref.trim(), text, files, label: kind === "text" ? "Notes" : "" }));
+    setRef(""); setText(""); setPaths("");
   });
   const uploadFiles = (files: FileList | null) => act(async () => {
     for (const f of Array.from(files ?? [])) setProject(await api.upload(p.id, f));
@@ -50,13 +53,21 @@ export default function SourcesTab({ project: p, setProject, refresh, goto }: Ta
               </button>
             ))}
           </div>
-          {kind === "text" ? (
+          {kind === "session" ? (
+            <div className="space-y-3">
+              <Field label="Brief" hint={k.hint}><textarea className="input min-h-32" value={text} onChange={(e) => setText(e.target.value)} placeholder="Goal, what was built or changed, decisions and why, what to show, caveats" /></Field>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="sm:col-span-2"><Field label="Files and folders" hint="One path per line: docs, key source files, screenshots, decks. Secret files such as .env are skipped."><textarea className="input min-h-20 font-mono text-xs" value={paths} onChange={(e) => setPaths(e.target.value)} placeholder={"docs/spec.md\nsrc/routes/policies.tsx\n~/Desktop/screenshot.png"} /></Field></div>
+                <Field label="Workspace folder" hint="Relative paths resolve here."><input className="input" value={ref} onChange={(e) => setRef(e.target.value)} placeholder="~/code/my-app" /></Field>
+              </div>
+            </div>
+          ) : kind === "text" ? (
             <Field label="Notes or script" hint={k.hint}><textarea className="input min-h-40" value={text} onChange={(e) => setText(e.target.value)} /></Field>
           ) : (
             <Field label={k.label} hint={k.hint}><input className="input" value={ref} onChange={(e) => setRef(e.target.value)} placeholder={k.placeholder} onKeyDown={(e) => e.key === "Enter" && add()} /></Field>
           )}
           <div className="mt-4 flex justify-end">
-            <Button variant="primary" busy={busy} disabled={kind === "text" ? !text.trim() : !ref.trim()} onClick={add}>Add source</Button>
+            <Button variant="primary" busy={busy} disabled={kind === "session" ? !text.trim() && !paths.trim() : kind === "text" ? !text.trim() : !ref.trim()} onClick={add}>Add source</Button>
           </div>
         </div>
 
@@ -85,9 +96,13 @@ export default function SourcesTab({ project: p, setProject, refresh, goto }: Ta
                 <Icon className="size-4 shrink-0 text-zinc-400" />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium">{s.label}</div>
-                  <div className="truncate text-xs text-zinc-500">{s.ref || `${s.text.length.toLocaleString()} characters`}</div>
+                  <div className="truncate text-xs text-zinc-500" title={s.files?.join("\n")}>
+                    {s.kind === "session"
+                      ? [`${s.text.length.toLocaleString()} characters`, s.files?.length && `${s.files.length} file${s.files.length > 1 ? "s" : ""}`, s.images?.length && `${s.images.length} screenshot${s.images.length > 1 ? "s" : ""}`].filter(Boolean).join(" · ")
+                      : s.ref || `${s.text.length.toLocaleString()} characters`}
+                  </div>
                 </div>
-                <Badge>{s.kind}</Badge>
+                <Badge tone={s.kind === "session" ? "blue" : undefined}>{s.kind === "session" ? "session · leads the script" : s.kind}</Badge>
                 {s.slide_count > 0 && <Badge tone="blue">{s.slide_count} slides</Badge>}
                 <Button size="sm" variant="ghost" title="Remove" onClick={() => act(async () => setProject(await api.deleteSource(p.id, s.id)))}><Trash2 className="size-4" /></Button>
               </div>

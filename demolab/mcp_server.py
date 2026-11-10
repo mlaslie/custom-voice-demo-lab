@@ -18,7 +18,8 @@ READ = ToolAnnotations(readOnlyHint=True)
 
 mcp = MCPServer("voice-demo-lab", version="0.1.0", instructions=(
     "Voice Demo Lab makes narrated demo videos (custom Gemini TTS voice) of web apps and slide decks. "
-    "Flow: create_project -> add_source (url/repo/pptx/pdf/gslides/text) -> draft_script (or set_segments) "
+    "Flow: create_project -> add_session_context (when the request comes out of a working session) -> "
+    "add_source (url/repo/pptx/pdf/gslides/text) -> draft_script (or set_segments) "
     "-> the user reviews in the web app (open_studio) -> approve_script ONLY when the user says so -> "
     "plan_actions + dry_run for web steps -> render. Never ask for or handle the Gemini API key: tell the "
     "user to add it in the web app's Settings."))
@@ -122,6 +123,29 @@ def add_source(project_id: str, kind: str, ref: str = "", text: str = "", label:
         p = client.call("POST", f"/api/projects/{project_id}/sources",
                         json=dict(kind=kind, ref=ref, text=text, label=label))
     return _summary(p)
+
+
+@mcp.tool()
+def add_session_context(project_id: str, goal: str, built: str = "", decisions: str = "",
+                        highlights: str = "", caveats: str = "", audience: str = "",
+                        files: list[str] | None = None, workspace: str = "", label: str = "") -> dict:
+    """Give the script writer what this conversation knows. Call it before draft_script whenever the
+    demo is about work done or discussed in the current session; the script is built around it.
+    Write each field in plain prose from the conversation (facts, not instructions to the writer):
+    - goal: what the work is for and who it helps
+    - built: what was built or changed, including names of features, screens and commands
+    - decisions: notable choices and why they were made
+    - highlights: what the demo should show, in a sensible order
+    - caveats: what is unfinished, broken or must not be shown
+    - audience: who will watch, if the user said
+    files: paths of the files and folders that matter most (docs, specs, key source files, screenshots,
+    decks); relative paths resolve against `workspace` (the session's working folder). Keep it focused:
+    a few to a couple of dozen entries. Never include secrets such as .env files or keys."""
+    parts = [("Goal", goal), ("What was built or changed", built), ("Decisions and why", decisions),
+             ("What to show", highlights), ("Caveats (do not show or claim)", caveats), ("Audience", audience)]
+    brief = "\n\n".join(f"{h}:\n{v.strip()}" for h, v in parts if v and v.strip())
+    return _summary(client.call("POST", f"/api/projects/{project_id}/sources", json=dict(
+        kind="session", text=brief, files=files or [], ref=workspace, label=label or "Session context")))
 
 
 @mcp.tool()

@@ -3,7 +3,9 @@
 Narrated demo videos of web apps and slide decks in **your own custom Gemini TTS voice**.
 
 1. **Sources**: point it at a live web app, a source folder, a PowerPoint/PDF, a Google Slides deck, or
-   paste notes or an existing script.
+   paste notes or an existing script. When you ask from a coding session ("make a demo of what we just
+   built"), the agent adds **session context**: a brief of the goal, what was built and why, what to show
+   and what to avoid, plus the key files and screenshots. The script is built around it.
 2. **Script**: Gemini drafts the narration (title cards, slide narration, web steps). You edit it, hear
    any line in your voice, ask AI to revise a segment, and approve.
 3. **Rehearse** (web apps): Gemini explores the app and plans the clicks for each step against the real
