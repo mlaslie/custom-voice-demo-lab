@@ -1,4 +1,5 @@
 export type Scenario = "slides" | "website" | "hybrid";
+export type Resolution = "1080p" | "4k";
 export type SegType = "card" | "slide" | "step";
 export type ActionOp =
   | "goto" | "click" | "fill" | "press" | "hover" | "scroll" | "wait" | "wait_for" | "highlight" | "unhighlight" | "verify";
@@ -149,6 +150,9 @@ export interface Render {
   created_at: number;
   seconds: number;
   segments: number;
+  resolution?: Resolution;
+  width?: number;
+  height?: number;
   drive_file_id?: string;
   drive_url?: string;
   drive_folder?: string;
@@ -181,6 +185,7 @@ export interface Project {
   brief: string;
   audience: string;
   instructions: string;
+  resolution: "" | Resolution;
   profile_id: string;
   speed: number;
   voice_id: string;
@@ -204,6 +209,7 @@ export interface ProjectSummary {
   scenario: Scenario;
   base_url: string;
   goal: string;
+  resolution?: "" | Resolution;
   updated_at: number;
   script_approved: boolean;
   segments: number;
@@ -244,6 +250,7 @@ export interface Settings {
   key_source: "env" | "keychain";
   tts_model: string;
   output_dir: string;
+  default_resolution: Resolution;
   audience: string;
   fake_gemini: boolean;
 }
@@ -321,7 +328,8 @@ export const api = {
   forgetLogin: (id: string) => req<Project>("DELETE", `/api/projects/${id}/login`),
   readiness: (id: string) => req<Readiness>("GET", `/api/projects/${id}/readiness`),
 
-  render: (id: string, force = false) => req<Job>("POST", `/api/projects/${id}/render`, { force }),
+  render: (id: string, force = false, resolution: "" | Resolution = "") =>
+    req<Job>("POST", `/api/projects/${id}/render`, { force, resolution }),
   jobs: (id: string) => req<Job[]>("GET", `/api/projects/${id}/jobs`),
   job: (jid: string) => req<Job>("GET", `/api/jobs/${jid}`),
   reveal: (id: string, i: number, downloaded = false) =>

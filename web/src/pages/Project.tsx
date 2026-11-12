@@ -173,6 +173,13 @@ export default function ProjectPage() {
               {settings?.profiles.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
             </select>
           </Field>
+          <Field label="Video resolution" hint="Used when rendering MP4s for this project.">
+            <select className="input" value={p.resolution} onChange={(e) => saveBrief({ resolution: e.target.value as "" | "1080p" | "4k" })}>
+              <option value="">Settings default ({settings?.default_resolution === "4k" ? "4K · 3840×2160" : "1080p · 1920×1080"})</option>
+              <option value="1080p">1080p · Full HD (1920×1080)</option>
+              <option value="4k">4K · Ultra HD (3840×2160)</option>
+            </select>
+          </Field>
           <div className="md:col-span-2">
             <span className="label flex items-center gap-1.5"><MessagesSquare className="size-3.5" />Antigravity Session Context</span>
             <p className="whitespace-pre-wrap rounded-xl bg-zinc-50 p-3 text-xs leading-relaxed dark:bg-zinc-950">{p.brief || "No session brief."}</p>

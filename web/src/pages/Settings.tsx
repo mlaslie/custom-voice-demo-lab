@@ -134,6 +134,42 @@ export default function SettingsPage({ onChange }: { onChange: (s: Settings) => 
         <Field label="Render folder" hint="Videos and the temporary frame cache go here. Point it at an external drive for long demos.">
           <input className="input font-mono" value={s.output_dir} onChange={set("output_dir")} />
         </Field>
+        <fieldset className="space-y-2">
+          <legend className="label">Default video resolution</legend>
+          <div className="flex flex-wrap gap-3">
+            <label
+              htmlFor="default-res-1080p"
+              className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700"
+            >
+              <input
+                type="radio"
+                id="default-res-1080p"
+                name="default-resolution"
+                value="1080p"
+                checked={(s.default_resolution || "1080p") === "1080p"}
+                onChange={() => setS({ ...s, default_resolution: "1080p" })}
+              />
+              <span>1080p · Full HD (1920×1080)</span>
+            </label>
+            <label
+              htmlFor="default-res-4k"
+              className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700"
+            >
+              <input
+                type="radio"
+                id="default-res-4k"
+                name="default-resolution"
+                value="4k"
+                checked={s.default_resolution === "4k"}
+                onChange={() => setS({ ...s, default_resolution: "4k" })}
+              />
+              <span>4K · Ultra HD (3840×2160)</span>
+            </label>
+          </div>
+          <p className="text-xs text-zinc-500">
+            Projects without an explicit override use this resolution. Both 1080p and 4K can be toggled per project.
+          </p>
+        </fieldset>
       </section>
 
       <div className="sticky bottom-4 flex justify-end">

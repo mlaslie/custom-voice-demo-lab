@@ -21,20 +21,21 @@ W, H = 1920, 1080
 
 
 def _fit_1080p(img: Image.Image) -> Image.Image:
-    """Normalize a browser screenshot to 1920x1080 RGB without aspect distortion."""
+    """Normalize a browser screenshot to 1920x1080 (or 3840x2160 if Retina HiDPI >=2560px) RGB."""
     rgb = img.convert("RGB")
-    if rgb.size == (W, H):
+    tw, th = (3840, 2160) if rgb.width >= 2560 else (W, H)
+    if rgb.size == (tw, th):
         return rgb
     ratio = rgb.width / max(1, rgb.height)
-    target = W / H
+    target = tw / th
     if abs(ratio - target) < 0.03:
-        return rgb.resize((W, H), Image.LANCZOS)
+        return rgb.resize((tw, th), Image.LANCZOS)
     # Sample top-left pixel for subtle neutral pad if viewport had non-16:9 chrome
     bg = rgb.getpixel((0, 0))
     fitted = rgb.copy()
-    fitted.thumbnail((W, H), Image.LANCZOS)
-    canvas = Image.new("RGB", (W, H), bg)
-    canvas.paste(fitted, ((W - fitted.width) // 2, (H - fitted.height) // 2))
+    fitted.thumbnail((tw, th), Image.LANCZOS)
+    canvas = Image.new("RGB", (tw, th), bg)
+    canvas.paste(fitted, ((tw - fitted.width) // 2, (th - fitted.height) // 2))
     return canvas
 
 

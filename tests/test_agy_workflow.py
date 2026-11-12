@@ -382,3 +382,115 @@ def test_antigravity_sidecar_proxy_auth_and_preload(tmp_path):
         backend.terminate()
         sidecar.wait(timeout=5)
         backend.wait(timeout=5)
+
+
+def test_1080p_and_4k_pptx_mp4_renders(tmp_path, monkeypatch):
+    """Rendering both 1080p and 4k produces native 1920x1080 and 3840x2160 MP4s."""
+    import json
+    import subprocess
+    from pathlib import Path
+    from fastapi.testclient import TestClient
+    from PIL import Image
+    from pptx import Presentation
+    from pptx.util import Inches
+    from demolab import api, config, pipeline, store
+
+    monkeypatch.setenv("DEMOLAB_FAKE_GEMINI", "1")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(config, "HOME", tmp_path)
+    monkeypatch.setattr(config, "SETTINGS", tmp_path / "settings.json")
+    monkeypatch.setattr(store, "ROOT", tmp_path / "projects")
+
+    c = TestClient(api.app, base_url="http://127.0.0.1")
+    kid = c.post("/api/keys", json={"name": "AGY Test", "key": "AIzaFAKEFAKEFAKEFAKE9999"}).json()["key"]["id"]
+    c.post(
+        "/api/profiles",
+        json={"name": "Custom Voice", "key_id": kid, "voice": "voice_test0001", "kind": "custom"},
+    ).raise_for_status()
+    c.put("/api/settings", json={"output_dir": str(tmp_path / "renders")}).raise_for_status()
+
+    deck_path = tmp_path / "deck.pptx"
+    prs = Presentation()
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.5)
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    tb = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(8), Inches(2))
+    tb.text_frame.text = "Resolution Benchmark Slide"
+    prs.save(str(deck_path))
+
+    created = c.post(
+        "/api/projects",
+        json={"name": "Resolution Test", "project_type": "slides", "resolution": "1080p"},
+    )
+    created.raise_for_status()
+    pid = created.json()["id"]
+
+    attached = c.post(
+        f"/api/projects/{pid}/decks",
+        json={"ref": str(deck_path)},
+    )
+    attached.raise_for_status()
+
+    script_resp = c.put(
+        f"/api/projects/{pid}/segments",
+        json=[
+            {
+                "type": "card",
+                "kicker": "OVERVIEW",
+                "title": "Intro Card",
+                "subtitle": "Testing native 1080p and 4K composition.",
+                "narration": "Welcome to this short test of both ten eighty p and four K output.",
+            },
+            {
+                "type": "slide",
+                "slide": 0,
+                "narration": "This slide is rasterized directly at the chosen output resolution.",
+            },
+        ],
+    )
+    script_resp.raise_for_status()
+    c.post(f"/api/projects/{pid}/approve", json={"approved": True}).raise_for_status()
+
+    r_1080 = pipeline.render(DummyJob(), pid, resolution="1080p")
+    mp4_1080 = Path(r_1080["file"])
+    assert mp4_1080.is_file()
+    assert r_1080["resolution"] == "1080p"
+    assert r_1080["width"] == 1920
+    assert r_1080["height"] == 1080
+
+    r_4k = pipeline.render(DummyJob(), pid, resolution="4k")
+    mp4_4k = Path(r_4k["file"])
+    assert mp4_4k.is_file()
+    assert r_4k["resolution"] == "4k"
+    assert r_4k["width"] == 3840
+    assert r_4k["height"] == 2160
+    slide_4k = store.pdir(pid) / "slides_3840x2160" / store.get(pid).slides[0]
+    assert slide_4k.is_file()
+    with Image.open(slide_4k) as im:
+        assert im.size == (3840, 2160)
+
+    def _dims(mp4: Path) -> tuple[int, int]:
+        out = subprocess.check_output(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "json",
+                str(mp4),
+            ],
+            text=True,
+        )
+        stream = json.loads(out)["streams"][0]
+        return int(stream["width"]), int(stream["height"])
+
+    assert _dims(mp4_1080) == (1920, 1080)
+    assert _dims(mp4_4k) == (3840, 2160)
+
+    proj = c.get(f"/api/projects/{pid}").json()
+    assert proj["renders"][0]["resolution"] == "4k"
+    assert proj["renders"][1]["resolution"] == "1080p"

@@ -72,6 +72,7 @@ class Settings(BaseModel):
     tts_model: str = "gemini-3.8-flash-tts"
     # Renders can be large; point this at an external drive if you have one.
     output_dir: str = str(HOME / "renders")
+    default_resolution: Literal["1080p", "4k"] = "1080p"
     audience: str = "slightly or not at all familiar with the product; full but high-level explanations"
     # Before voice profiles: one voice id and the "gemini_api_key" secret. Migrated on load.
     voice_id: str = Field(default="", exclude=True)

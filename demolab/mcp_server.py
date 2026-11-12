@@ -77,6 +77,7 @@ def _summary(p: dict, decks: bool = False) -> dict:
         "goal": p["goal"],
         "audience": p.get("audience", ""),
         "instructions": p["instructions"],
+        "resolution": p.get("resolution") or "(settings default)",
         "voice_profile": p.get("profile_id") or "(active profile)",
         "speed": p.get("speed") or "(the voice's)",
         "script_approved": p["script_approved"],
@@ -109,6 +110,9 @@ def _summary(p: dict, decks: bool = False) -> dict:
                 "index": idx,
                 "file": r["file"],
                 "seconds": r["seconds"],
+                "resolution": r.get("resolution", "1080p"),
+                "width": r.get("width", 1920),
+                "height": r.get("height", 1080),
                 **({"drive_url": r["drive_url"]} if r.get("drive_url") else {}),
                 **({"drive_file_id": r["drive_file_id"]} if r.get("drive_file_id") else {}),
                 **({"drive_folder": r["drive_folder"]} if r.get("drive_folder") else {}),
@@ -157,10 +161,11 @@ def open_studio(project_id: str = "", open_browser: bool = False, page: str = ""
 @mcp.tool(annotations=READ)
 def get_settings() -> dict:
     """Setup state (`setup_needed`, `setup_url`, `sidecar_pill`), active voice profile, saved profiles,
-    saved key hints (never raw keys), TTS model, and output directory."""
+    saved key hints (never raw keys), TTS model, default resolution, and output directory."""
     st = client.call("GET", "/api/settings")
     return {
         **{k: st[k] for k in ("setup_needed", "tts_model", "output_dir", "audience", "fake_gemini")},
+        "default_resolution": st.get("default_resolution", "1080p"),
         "setup_url": f"{client.BASE}/setup",
         "sidecar_pill": SIDECAR_PILL,
         "active_profile": _profile(st["active"]) if st["active"] else None,
@@ -183,12 +188,18 @@ def _profile(v: dict) -> dict:
 def update_settings(
     tts_model: str | None = None,
     output_dir: str | None = None,
+    default_resolution: str | None = None,
     audience: str | None = None,
 ) -> dict:
-    """Update non-secret settings (`tts_model`, `output_dir`, `audience`). API keys and voices are configured in Voice Demo Studio."""
+    """Update non-secret settings (`tts_model`, `output_dir`, `default_resolution` '1080p'|'4k', `audience`)."""
     body = {
         k: v
-        for k, v in dict(tts_model=tts_model, output_dir=output_dir, audience=audience).items()
+        for k, v in dict(
+            tts_model=tts_model,
+            output_dir=output_dir,
+            default_resolution=default_resolution,
+            audience=audience,
+        ).items()
         if v is not None
     }
     client.call("PUT", "/api/settings", json=body)
@@ -269,6 +280,7 @@ def start_demo(
     decks: list[str] | None = None,
     gslides_jsons: list[str] | None = None,
     voice_profile: str = "",
+    resolution: str = "",
 ) -> dict:
     """Create a new automated demo video project in Google Antigravity (or Claude Code).
     Supports:
@@ -307,6 +319,8 @@ def start_demo(
         instructions=instructions,
         base_url=base_url,
     )
+    if resolution.strip():
+        body["resolution"] = resolution.strip().lower()
     if voice_profile:
         body["profile_id"] = _find_profile(st, voice_profile)["id"]
     p = client.call("POST", "/api/projects", json=body)
@@ -438,11 +452,12 @@ def update_project(
     audience: str | None = None,
     instructions: str | None = None,
     research_summary: str | None = None,
+    resolution: str | None = None,
     voice_style: str | None = None,
     speed: float | None = None,
     decks: list[str] | None = None,
 ) -> dict:
-    """Update project metadata, pacing (`speed` 0.7..1.4, or 0 for profile default), `voice_style`, or attach more decks."""
+    """Update project metadata, resolution (`'1080p'`, `'4k'`, or `''`), pacing (`speed` 0.7..1.4), `voice_style`, or attach more decks."""
     body = {
         k: v
         for k, v in dict(
@@ -454,6 +469,7 @@ def update_project(
             audience=audience,
             instructions=instructions,
             research_summary=research_summary,
+            resolution=resolution,
             voice_style=voice_style,
             speed=speed,
         ).items()
@@ -538,10 +554,13 @@ def preview_voice(text: str, project_id: str = "", speed: float | None = None) -
 
 
 @mcp.tool()
-def render(project_id: str, wait: bool = False, force: bool = False) -> dict:
-    """Render the approved project to a 1080p MP4 (Gemini TTS narration, 2x supersampled title cards, slides,
-    and AGY browser step sequences). Pass `wait=True` for short/medium demos or poll with `get_job`."""
-    j = client.call("POST", f"/api/projects/{project_id}/render", json={"force": force})
+def render(project_id: str, wait: bool = False, force: bool = False, resolution: str = "") -> dict:
+    """Render the approved project to MP4 (`1080p` default, or `4k` / `3840x2160` native vector slides & cards).
+    Pass `wait=True` for short/medium demos or poll with `get_job`."""
+    payload: dict = {"force": force}
+    if resolution.strip():
+        payload["resolution"] = resolution.strip().lower()
+    j = client.call("POST", f"/api/projects/{project_id}/render", json=payload)
     return _job(client.wait_job(j, timeout=3600) if wait else j)
 
 

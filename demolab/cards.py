@@ -69,56 +69,61 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> list[st
     return lines
 
 
-def render_card_image(c: dict) -> Image.Image:
-    """Render a single Google Cloud styled title card to a 1920x1080 RGB Image."""
-    img = Image.new("RGB", (SW, SH), (255, 255, 255))
+def render_card_image(c: dict, width: int = W, height: int = H) -> Image.Image:
+    """Render a single Google Cloud styled title card at `width`x`height` with supersampling."""
+    ss = 2.0 if width <= 1920 else 1.5
+    sw, sh = int(round(width * ss)), int(round(height * ss))
+    u = sw / 1920.0
+    sc = lambda v: max(1, int(round(v * u)))
+
+    img = Image.new("RGB", (sw, sh), (255, 255, 255))
     d = ImageDraw.Draw(img)
 
     # Top 4-color Google Cloud bar
-    bar_h = 12 * SCALE
-    seg_w = SW // 4
+    bar_h = sc(12)
+    seg_w = sw // 4
     for i, col in enumerate(COLORS):
         x0 = i * seg_w
-        x1 = SW if i == 3 else (i + 1) * seg_w
+        x1 = sw if i == 3 else (i + 1) * seg_w
         d.rectangle([x0, 0, x1, bar_h], fill=col)
 
     # Bottom subtle tint bar
-    d.rectangle([0, SH - 8 * SCALE, SW, SH], fill=FOOT_BLUE)
+    d.rectangle([0, sh - sc(8), sw, sh], fill=FOOT_BLUE)
 
-    margin_x = 160 * SCALE
-    max_w = SW - 2 * margin_x
+    margin_x = sc(160)
+    max_w = sw - 2 * margin_x
 
-    f_kicker = _font(BOLD_FONTS, 26 * SCALE)
+    f_kicker = _font(BOLD_FONTS, sc(26))
     bullets = [b.strip() for b in (c.get("bullets") or []) if str(b).strip()]
-    title_pt = (64 if bullets else 74) * SCALE
+    title_pt = sc(64 if bullets else 74)
     f_title = _font(BOLD_FONTS, title_pt)
-    f_sub = _font(REG_FONTS, 34 * SCALE)
-    f_bullet = _font(REG_FONTS, 33 * SCALE)
+    f_sub = _font(REG_FONTS, sc(34))
+    f_bullet = _font(REG_FONTS, sc(33))
 
     kicker = (c.get("kicker") or "").strip().upper()
     title_lines = _wrap(d, (c.get("title") or "").strip(), f_title, max_w)
     sub_lines = _wrap(d, (c.get("sub") or "").strip(), f_sub, max_w) if c.get("sub") else []
-    bullet_blocks = [_wrap(d, b, f_bullet, max_w - 42 * SCALE) for b in bullets]
+    bullet_blocks = [_wrap(d, b, f_bullet, max_w - sc(42)) for b in bullets]
 
     # Measure total vertical height to center cleanly
-    dots_h = (18 + 30) * SCALE
-    kicker_h = (38 * SCALE) if kicker else 0
+    dots_h = sc(18 + 30)
+    kicker_h = sc(38) if kicker else 0
     title_line_h = int(title_pt * 1.18)
     title_h = len(title_lines) * title_line_h
-    sub_line_h = int(34 * SCALE * 1.38)
-    sub_h = (24 * SCALE + len(sub_lines) * sub_line_h) if sub_lines else 0
-    bul_line_h = int(33 * SCALE * 1.42)
+    sub_line_h = int(sc(34) * 1.38)
+    sub_h = (sc(24) + len(sub_lines) * sub_line_h) if sub_lines else 0
+    bul_line_h = int(sc(33) * 1.42)
     bul_h = 0
     if bullet_blocks:
-        bul_h = 36 * SCALE + sum(len(bl) * bul_line_h + 14 * SCALE for bl in bullet_blocks)
+        bul_h = sc(36) + sum(len(bl) * bul_line_h + sc(14) for bl in bullet_blocks)
 
     total_h = dots_h + kicker_h + title_h + sub_h + bul_h
-    y = max(90 * SCALE, (SH - total_h) // 2)
+    y = max(sc(90), (sh - total_h) // 2)
 
     # 4 Google Cloud dots
-    dot_r = 9 * SCALE
+    dot_r = sc(9)
     for i, col in enumerate(COLORS):
-        cx = margin_x + i * (30 * SCALE) + dot_r
+        cx = margin_x + i * sc(30) + dot_r
         cy = y + dot_r
         d.ellipse([cx - dot_r, cy - dot_r, cx + dot_r, cy + dot_r], fill=col)
     y += dots_h
@@ -135,38 +140,39 @@ def render_card_image(c: dict) -> Image.Image:
 
     # Subtitle
     if sub_lines:
-        y += 24 * SCALE
+        y += sc(24)
         for line in sub_lines:
             d.text((margin_x, y), line, font=f_sub, fill=INK_SUB)
             y += sub_line_h
 
     # Bullets
     if bullet_blocks:
-        y += 36 * SCALE
-        b_rad = 8 * SCALE
+        y += sc(36)
+        b_rad = sc(8)
         for i, bl in enumerate(bullet_blocks):
             col = COLORS[i % 4]
             cy = y + int(bul_line_h * 0.48)
             cx = margin_x + b_rad
             d.ellipse([cx - b_rad, cy - b_rad, cx + b_rad, cy + b_rad], fill=col)
             for line in bl:
-                d.text((margin_x + 38 * SCALE, y), line, font=f_bullet, fill=INK_BODY)
+                d.text((margin_x + sc(38), y), line, font=f_bullet, fill=INK_BODY)
                 y += bul_line_h
-            y += 14 * SCALE
+            y += sc(14)
 
-    return img.resize((W, H), Image.LANCZOS)
+    return img.resize((width, height), Image.LANCZOS)
 
 
-def render_cards(cards: list[dict], out_dir: pathlib.Path) -> dict[str, pathlib.Path]:
+def render_cards(cards: list[dict], out_dir: pathlib.Path, width: int = W, height: int = H) -> dict[str, pathlib.Path]:
     """Render each distinct card to out_dir/<hash>.png; returns {key: path}. Key = card_key(c)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     paths: dict[str, pathlib.Path] = {}
+    suffix = "" if (width, height) == (W, H) else f"_{width}x{height}"
     for c in cards:
         k = card_key(c)
-        out = out_dir / f"{k}.png"
+        out = out_dir / f"{k}{suffix}.png"
         paths[k] = out
         if not out.exists():
-            render_card_image(c).save(out, format="PNG")
+            render_card_image(c, width=width, height=height).save(out, format="PNG")
     return paths
 
 

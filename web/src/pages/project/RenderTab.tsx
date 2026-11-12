@@ -45,11 +45,16 @@ function saveDriveFolderId(v: string) {
   }
 }
 
-export default function RenderTab({ project: p, refresh, goto }: TabProps) {
+export default function RenderTab({ project: p, setProject, refresh, goto }: TabProps) {
   const [s, setS] = useState<Settings | null>(null);
   const [readiness, setReadiness] = useState<Readiness | null>(null);
   const [gdrive, setGdrive] = useState<GDriveStatus | null>(null);
   const [err, setErr] = useState("");
+  const activeRes: "1080p" | "4k" = p.resolution || s?.default_resolution || "1080p";
+  const changeResolution = (resolution: "1080p" | "4k") => {
+    setErr("");
+    api.patchProject(p.id, { resolution }).then(setProject).catch((e) => setErr(e.message));
+  };
   const job = useJob(() => {
     refresh();
     api.readiness(p.id).then(setReadiness).catch(() => {});
@@ -146,6 +151,39 @@ export default function RenderTab({ project: p, refresh, goto }: TabProps) {
           </div>
         )}
 
+        <fieldset className="mb-4 space-y-2">
+          <legend className="label">Video resolution</legend>
+          <div className="flex flex-wrap gap-3">
+            <label
+              htmlFor="res-1080p"
+              className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700"
+            >
+              <input
+                type="radio"
+                id="res-1080p"
+                name="render-resolution"
+                value="1080p"
+                checked={activeRes === "1080p"}
+                onChange={() => changeResolution("1080p")}
+              />
+              <span>1080p · Full HD (1920×1080)</span>
+            </label>
+            <label
+              htmlFor="res-4k"
+              className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700"
+            >
+              <input
+                type="radio"
+                id="res-4k"
+                name="render-resolution"
+                value="4k"
+                checked={activeRes === "4k"}
+                onChange={() => changeResolution("4k")}
+              />
+              <span>4K · Ultra HD (3840×2160)</span>
+            </label>
+          </div>
+        </fieldset>
         <div className="flex flex-wrap items-center gap-3">
           <Button
             variant="primary"
@@ -154,13 +192,13 @@ export default function RenderTab({ project: p, refresh, goto }: TabProps) {
             disabled={blocking.length > 0}
             onClick={() => {
               setErr("");
-              job.start(api.render(p.id)).catch((e) => setErr(e.message));
+              job.start(api.render(p.id, false, activeRes)).catch((e) => setErr(e.message));
             }}
           >
-            Render 1080p MP4
+            Render {activeRes === "4k" ? "4K" : "1080p"} MP4
           </Button>
           <span className="text-xs text-zinc-500">
-            Gemini TTS audio & 2× supersampled title cards are cached, so re-renders after edits finish in seconds.
+            Gemini TTS audio & supersampled title cards are cached, so re-renders after edits finish in seconds.
           </span>
         </div>
         {s && (
@@ -358,6 +396,9 @@ function RenderCard({
       <div className="space-y-2.5 px-4 py-3 text-xs">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-medium">{new Date(r.created_at * 1000).toLocaleString()}</span>
+          <Badge tone={r.resolution === "4k" ? "violet" : "blue"}>
+            {r.resolution === "4k" ? "4K" : "1080p"} · {r.width || (r.resolution === "4k" ? 3840 : 1920)}×{r.height || (r.resolution === "4k" ? 2160 : 1080)}
+          </Badge>
           <span className="text-zinc-500">
             {Math.floor(r.seconds / 60)}:{String(Math.round(r.seconds % 60)).padStart(2, "0")} · {r.segments} segments
           </span>

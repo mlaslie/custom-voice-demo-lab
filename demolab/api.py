@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import agy_browser, config, gdrive_store, gemini, jobs, pipeline, script, sources, store
-from .models import Project, ResearchItem, Scenario, Segment
+from .models import Project, ProjectResolution, ResearchItem, Resolution, Scenario, Segment
 
 STATIC = pathlib.Path(__file__).parent / "static"
 ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
@@ -82,6 +82,7 @@ def get_settings():
 class SettingsIn(BaseModel):
     tts_model: str | None = None
     output_dir: str | None = None
+    default_resolution: Resolution | None = None
     audience: str | None = None
 
 
@@ -273,13 +274,14 @@ class ProjectIn(BaseModel):
     brief: str = ""
     audience: str = ""
     instructions: str = ""
+    resolution: ProjectResolution = ""
     profile_id: str = ""
 
 
 @app.get("/api/projects")
 def list_projects():
     return [
-        p.model_dump(include={"id", "name", "scenario", "base_url", "goal", "updated_at", "script_approved"})
+        p.model_dump(include={"id", "name", "scenario", "base_url", "goal", "resolution", "updated_at", "script_approved"})
         | {
             "segments": len(p.segments),
             "renders": len(p.renders),
@@ -313,6 +315,7 @@ class ProjectPatch(BaseModel):
     audience: str | None = None
     instructions: str | None = None
     research_summary: str | None = None
+    resolution: ProjectResolution | None = None
     profile_id: str | None = None
     speed: float | None = None
     voice_id: str | None = None
@@ -503,12 +506,13 @@ def project_readiness(pid: str):
 
 class RenderIn(BaseModel):
     force: bool = False
+    resolution: ProjectResolution = ""
 
 
 @app.post("/api/projects/{pid}/render")
 def render(pid: str, b: RenderIn = Body(default=RenderIn())):
     store.get(pid)
-    return jobs.start(pid, "render", pipeline.render, pid, b.force).public()
+    return jobs.start(pid, "render", pipeline.render, pid, b.force, False, b.resolution).public()
 
 
 @app.get("/api/projects/{pid}/jobs")

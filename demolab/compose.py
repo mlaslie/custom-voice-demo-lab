@@ -145,23 +145,25 @@ def banner(img: Image.Image, elapsed: float, what: str, speed: float) -> Image.I
     ov = Image.new("RGBA", im.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(ov)
     iw, ih = im.size
+    sc = iw / 1920.0
+    s = lambda v: max(1, int(round(v * sc)))
     d.rectangle([0, 0, iw, ih], fill=(0, 0, 0, 70))
-    f1, f2, f3 = _font(FONTS_B, 44), _font(FONTS_R, 26), _font(FONTS_B, 26)
+    f1, f2, f3 = _font(FONTS_B, s(44)), _font(FONTS_R, s(26)), _font(FONTS_B, s(26))
     title, spd = f"Fast-forwarding  ·  {int(elapsed)} s", f"×{speed:.0f}"
     tw = d.textlength("Fast-forwarding  ·  9999 s", font=f1)   # fixed width: the box doesn't jitter
     sw = d.textlength(spd, font=f3)
-    bw = int(130 + tw + 30 + sw + 40)
-    while what and d.textlength(what, font=f2) > bw - 130 - 40:
+    bw = int(s(130) + tw + s(30) + sw + s(40))
+    while what and d.textlength(what, font=f2) > bw - s(130) - s(40):
         what = what[:-2].rstrip() + "…"
-    bh = 150
-    x, y = (iw - bw) // 2, ih - bh - 70
-    d.rounded_rectangle([x, y, x + bw, y + bh], radius=28, fill=(16, 32, 64, 225), outline=(138, 180, 248, 255), width=3)
-    gx, gy = x + 40, y + 45
-    for k in (0, 34):
-        d.polygon([(gx + k, gy), (gx + k + 32, gy + 30), (gx + k, gy + 60)], fill=(138, 180, 248, 255))
-    d.text((x + 130, y + 26), title, font=f1, fill=(255, 255, 255, 255))
-    d.text((x + 130, y + 88), what, font=f2, fill=(210, 227, 252, 255))
-    d.text((x + bw - 40 - sw, y + 38), spd, font=f3, fill=(251, 188, 4, 255))
+    bh = s(150)
+    x, y = (iw - bw) // 2, ih - bh - s(70)
+    d.rounded_rectangle([x, y, x + bw, y + bh], radius=s(28), fill=(16, 32, 64, 225), outline=(138, 180, 248, 255), width=s(3))
+    gx, gy = x + s(40), y + s(45)
+    for k in (0, s(34)):
+        d.polygon([(gx + k, gy), (gx + k + s(32), gy + s(30)), (gx + k, gy + s(60))], fill=(138, 180, 248, 255))
+    d.text((x + s(130), y + s(26)), title, font=f1, fill=(255, 255, 255, 255))
+    d.text((x + s(130), y + s(88)), what, font=f2, fill=(210, 227, 252, 255))
+    d.text((x + bw - s(40) - sw, y + s(38)), spd, font=f3, fill=(251, 188, 4, 255))
     return Image.alpha_composite(im, ov).convert("RGB")
 
 
@@ -169,38 +171,40 @@ def apply_highlight(img: Image.Image, box: HighlightBox) -> Image.Image:
     """Draw a spotlight callout over a browser screenshot region."""
     base = img.convert("RGBA")
     iw, ih = base.size
+    sc = iw / 1920.0
+    s = lambda v: max(1, int(round(v * sc)))
     nx, ny, nw, nh = box.normalized(iw, ih)
-    pad = 10
-    x0 = max(4, int(nx * iw) - pad)
-    y0 = max(4, int(ny * ih) - pad)
-    x1 = min(iw - 4, int((nx + nw) * iw) + pad)
-    y1 = min(ih - 4, int((ny + nh) * ih) + pad)
+    pad = s(10)
+    x0 = max(s(4), int(nx * iw) - pad)
+    y0 = max(s(4), int(ny * ih) - pad)
+    x1 = min(iw - s(4), int((nx + nw) * iw) + pad)
+    y1 = min(ih - s(4), int((ny + nh) * ih) + pad)
 
     dim = Image.new("RGBA", (iw, ih), (16, 24, 40, 82))
     dd = ImageDraw.Draw(dim)
-    dd.rounded_rectangle([x0, y0, x1, y1], radius=14, fill=(0, 0, 0, 0))
+    dd.rounded_rectangle([x0, y0, x1, y1], radius=s(14), fill=(0, 0, 0, 0))
     comp = Image.alpha_composite(base, dim)
 
     ov = Image.new("RGBA", (iw, ih), (0, 0, 0, 0))
     od = ImageDraw.Draw(ov)
-    od.rounded_rectangle([x0 - 3, y0 - 3, x1 + 3, y1 + 3], radius=16, outline=(251, 188, 4, 150), width=6)
-    od.rounded_rectangle([x0, y0, x1, y1], radius=14, outline=(26, 115, 232, 255), width=4)
+    od.rounded_rectangle([x0 - s(3), y0 - s(3), x1 + s(3), y1 + s(3)], radius=s(16), outline=(251, 188, 4, 150), width=s(6))
+    od.rounded_rectangle([x0, y0, x1, y1], radius=s(14), outline=(26, 115, 232, 255), width=s(4))
 
     if box.label.strip():
-        f_lbl = _font(FONTS_B, 24)
+        f_lbl = _font(FONTS_B, s(24))
         label = box.label.strip()
         tw = int(od.textlength(label, font=f_lbl))
-        pw, ph = tw + 32, 42
-        px = min(max(12, x0), iw - pw - 12)
-        py = y0 - ph - 10 if y0 >= ph + 18 else min(ih - ph - 12, y1 + 10)
-        od.rounded_rectangle([px, py, px + pw, py + ph], radius=21, fill=(26, 115, 232, 245))
-        od.text((px + 16, py + 8), label, font=f_lbl, fill=(255, 255, 255, 255))
+        pw, ph = tw + s(32), s(42)
+        px = min(max(s(12), x0), iw - pw - s(12))
+        py = y0 - ph - s(10) if y0 >= ph + s(18) else min(ih - ph - s(12), y1 + s(10))
+        od.rounded_rectangle([px, py, px + pw, py + ph], radius=s(21), fill=(26, 115, 232, 245))
+        od.text((px + s(16), py + s(8)), label, font=f_lbl, fill=(255, 255, 255, 255))
 
     return Image.alpha_composite(comp, ov).convert("RGB")
 
 
-def _zoom_crop(img: Image.Image, box: HighlightBox, progress: float) -> Image.Image:
-    """Smooth cosine-eased pan/zoom from full 1080p frame toward `box` (clamped to <=1.65x zoom)."""
+def _zoom_crop(img: Image.Image, box: HighlightBox, progress: float, width: int = W, height: int = H) -> Image.Image:
+    """Smooth cosine-eased pan/zoom from full frame toward `box` (clamped to <=1.65x zoom)."""
     iw, ih = img.size
     nx, ny, nw, nh = box.normalized(iw, ih)
     cx = (nx + nw / 2.0) * iw
@@ -213,7 +217,7 @@ def _zoom_crop(img: Image.Image, box: HighlightBox, progress: float) -> Image.Im
     cw, ch = iw * cur_scale, ih * cur_scale
     left = max(0.0, min(iw - cw, cx - cw / 2.0))
     top = max(0.0, min(ih - ch, cy - ch / 2.0))
-    return img.crop((int(left), int(top), int(left + cw), int(top + ch))).resize((W, H), Image.LANCZOS)
+    return img.crop((int(left), int(top), int(left + cw), int(top + ch))).resize((width, height), Image.LANCZOS)
 
 
 def _wav_len(p: pathlib.Path) -> float:
@@ -230,6 +234,8 @@ def compose(
     frames_dir: pathlib.Path,
     work: pathlib.Path,
     out: pathlib.Path,
+    width: int = W,
+    height: int = H,
 ) -> float:
     """Returns the rendered MP4 video length in seconds."""
     work.mkdir(parents=True, exist_ok=True)
@@ -247,7 +253,7 @@ def compose(
             return f
         if f not in jpgs:
             jpgs[f] = work / f"still{len(jpgs):04d}.jpg"
-            Image.open(f).convert("RGB").resize((W, H), Image.LANCZOS).save(jpgs[f], quality=95)
+            Image.open(f).convert("RGB").resize((width, height), Image.LANCZOS).save(jpgs[f], quality=95)
         return jpgs[f]
 
     def add(f: pathlib.Path, d: float):
@@ -281,7 +287,7 @@ def compose(
     def prepare_step_base(sf: StepFrame, sdir: pathlib.Path) -> pathlib.Path:
         nonlocal nstep
         raw_p = sdir / sf.file
-        im = Image.open(raw_p).convert("RGB").resize((W, H), Image.LANCZOS)
+        im = Image.open(raw_p).convert("RGB").resize((width, height), Image.LANCZOS)
         if sf.highlight:
             im = apply_highlight(im, sf.highlight)
         nstep += 1
@@ -321,7 +327,7 @@ def compose(
                 for k in range(n):
                     nstep += 1
                     g = work / f"stepff{nstep:06d}.jpg"
-                    im_k = _zoom_crop(src_im, sf.zoom_to, k / max(1, n - 1)) if sf.zoom_to else src_im
+                    im_k = _zoom_crop(src_im, sf.zoom_to, k / max(1, n - 1), width, height) if sf.zoom_to else src_im
                     banner(im_k, (k + 0.5) * step_dt * speed, sf.ff_what, speed).save(g, quality=92)
                     add(g, step_dt)
                     last_emitted = g
@@ -332,7 +338,7 @@ def compose(
                 for k in range(n):
                     nstep += 1
                     g = work / f"stepzm{nstep:06d}.jpg"
-                    _zoom_crop(src_im, sf.zoom_to, min(1.0, (k / max(1, n - 1)) * 1.25)).save(g, quality=93)
+                    _zoom_crop(src_im, sf.zoom_to, min(1.0, (k / max(1, n - 1)) * 1.25), width, height).save(g, quality=93)
                     add(g, step_dt)
                     last_emitted = g
             else:
@@ -456,7 +462,7 @@ def compose(
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-f", "concat", "-safe", "0", "-i", str(lst),
             "-i", str(narr),
-            "-vf", f"fps={FPS},scale={W}:{H}:flags=lanczos,format=yuv420p",
+            "-vf", f"fps={FPS},scale={width}:{height}:flags=lanczos,format=yuv420p",
             "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-tune", "stillimage",
             "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
             "-t", f"{T:.2f}", str(tmp),

@@ -17,18 +17,18 @@ import tempfile
 
 from PIL import Image
 
-from . import store
+from . import pptx_render, store
 from .models import Project, Source
 
 W, H = 1920, 1080
 _GSLIDES_ID_RE = re.compile(r"docs\.google\.com/presentation/d/([A-Za-z0-9_-]+)")
 
 
-def _letterbox(img: Image.Image) -> Image.Image:
+def _letterbox(img: Image.Image, width: int = W, height: int = H) -> Image.Image:
     img = img.convert("RGB")
-    img.thumbnail((W, H), Image.LANCZOS)
-    canvas = Image.new("RGB", (W, H), "white")
-    canvas.paste(img, ((W - img.width) // 2, (H - img.height) // 2))
+    img.thumbnail((width, height), Image.LANCZOS)
+    canvas = Image.new("RGB", (width, height), "white")
+    canvas.paste(img, ((width - img.width) // 2, (height - img.height) // 2))
     return canvas
 
 
@@ -42,13 +42,13 @@ def _add_slides(p: Project, images: list[Image.Image], src: Source) -> None:
     src.slide_count = len(images)
 
 
-def _render_pdf(path: pathlib.Path) -> tuple[list[Image.Image], list[str]]:
+def _render_pdf(path: pathlib.Path, width: int = W, height: int = H) -> tuple[list[Image.Image], list[str]]:
     import pypdfium2 as pdfium
     pdf = pdfium.PdfDocument(str(path))
     imgs, texts = [], []
     for page in pdf:
         w, h = page.get_size()
-        imgs.append(page.render(scale=max(W / w, H / h)).to_pil())
+        imgs.append(page.render(scale=max(width / w, height / h)).to_pil())
         texts.append(page.get_textpage().get_text_range().strip())
     return imgs, texts
 
@@ -217,13 +217,18 @@ def add_pptx(p: Project, path: pathlib.Path, label: str = "") -> Source:
                 parts += [" | ".join(c.text for c in row.cells) for row in shp.table.rows]
         texts.append("\n".join(parts))
         notes.append(slide.notes_slide.notes_text_frame.text if slide.has_notes_slide else "")
-    pdf, why = _pptx_to_pdf(path)
-    if pdf:
-        imgs, _ = _render_pdf(pdf)
+    backend = os.environ.get("DEMOLAB_PPTX_BACKEND", "builtin").strip().lower()
+    if backend != "external":
+        imgs = pptx_render.render_pptx(path, width=W, height=H)
         _add_slides(p, imgs, src)
     else:
-        src.slide_offset = len(p.slides)
-        src.label += f" (text only, no slide images: {why})"
+        pdf, why = _pptx_to_pdf(path)
+        if pdf:
+            imgs, _ = _render_pdf(pdf)
+            _add_slides(p, imgs, src)
+        else:
+            src.slide_offset = len(p.slides)
+            src.label += f" (text only, no slide images: {why})"
     src.text = _slides_digest(texts, notes, src.slide_offset)
     return src
 
@@ -256,7 +261,21 @@ def _keynote_error(stderr: str) -> str:
 
 
 def _pptx_to_pdf(path: pathlib.Path) -> tuple[pathlib.Path | None, str]:
-    """Slide images need a PDF: LibreOffice if installed, else Keynote on macOS."""
+    """Convert `.pptx` to PDF via built-in `pptx_render`, or external LibreOffice/Keynote when configured."""
+    backend = os.environ.get("DEMOLAB_PPTX_BACKEND", "builtin").strip().lower()
+    if backend == "external":
+        return _pptx_to_pdf_external(path)
+    out = pathlib.Path(tempfile.mkdtemp(prefix="demolab-pptx-"))
+    pdf = out / (path.stem + ".pdf")
+    try:
+        pptx_render.pptx_to_pdf(path, pdf)
+        return pdf, ""
+    except Exception as e:
+        return None, f"Built-in PPTX renderer error: {e}"
+
+
+def _pptx_to_pdf_external(path: pathlib.Path) -> tuple[pathlib.Path | None, str]:
+    """External converter fallback: LibreOffice if installed, else Keynote on macOS."""
     soffice = shutil.which("soffice") or next(
         (x for x in ["/Applications/LibreOffice.app/Contents/MacOS/soffice"] if os.path.exists(x)), None)
     out = pathlib.Path(tempfile.mkdtemp(prefix="demolab-pptx-"))
@@ -299,3 +318,45 @@ def add_deck(p: Project, ref: str, label: str = "", gslides_json: str = "") -> S
     if ext == ".pptx":
         return add_pptx(p, path, label)
     raise ValueError(f"Unsupported deck type {ext}: use a Google Slides URL, .pptx, or .pdf file")
+
+
+def slides_for_resolution(p: Project, width: int = W, height: int = H) -> pathlib.Path:
+    """Return directory containing slide PNGs sized to `width`x`height`, re-rendering vectors cleanly when >1080p."""
+    base_dir = store.sub(p.id, "slides")
+    if (width, height) == (W, H) or not p.slides:
+        return base_dir
+    target_dir = store.sub(p.id, f"slides_{width}x{height}")
+    if all((target_dir / name).is_file() for name in p.slides):
+        return target_dir
+
+    backend = os.environ.get("DEMOLAB_PPTX_BACKEND", "builtin").strip().lower()
+    for src in p.sources:
+        if src.slide_count <= 0:
+            continue
+        names = p.slides[src.slide_offset : src.slide_offset + src.slide_count]
+        if names and all((target_dir / n).is_file() for n in names):
+            continue
+        ref_path = pathlib.Path(src.ref).expanduser() if src.ref else None
+        imgs: list[Image.Image] = []
+        try:
+            if src.kind == "pptx" and ref_path and ref_path.is_file():
+                if backend != "external":
+                    imgs = pptx_render.render_pptx(ref_path, width=width, height=height)
+                else:
+                    pdf, _ = _pptx_to_pdf(ref_path)
+                    if pdf:
+                        imgs, _ = _render_pdf(pdf, width=width, height=height)
+            elif src.kind in ("pdf", "gslides") and ref_path and ref_path.is_file() and ref_path.suffix.lower() == ".pdf":
+                imgs, _ = _render_pdf(ref_path, width=width, height=height)
+        except Exception:
+            imgs = []
+        if len(imgs) == len(names):
+            for name, im in zip(names, imgs):
+                _letterbox(im, width, height).save(target_dir / name)
+
+    for name in p.slides:
+        out_file = target_dir / name
+        if not out_file.is_file() and (base_dir / name).is_file():
+            with Image.open(base_dir / name) as im:
+                _letterbox(im, width, height).save(out_file)
+    return target_dir

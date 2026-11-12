@@ -10,10 +10,10 @@ from typing import NamedTuple
 
 import httpx
 
-from . import config, gemini, store
+from . import config, gemini, sources, store
 from .cards import card_key, render_cards
 from .compose import StepSequence, Still, compose
-from .models import Project, Render
+from .models import Project, RESOLUTION_DIMS, Render, Resolution, normalize_resolution
 
 
 class Voicing(NamedTuple):
@@ -128,7 +128,15 @@ def _slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:50] or "demo"
 
 
-def render(job, pid: str, force: bool = False, keep_build: bool = False) -> dict:
+def effective_resolution(p: Project, override: str = "", st: config.Settings | None = None) -> Resolution:
+    if (override or "").strip():
+        return normalize_resolution(override)
+    if (p.resolution or "").strip():
+        return normalize_resolution(p.resolution)
+    return normalize_resolution((st or config.load()).default_resolution)
+
+
+def render(job, pid: str, force: bool = False, keep_build: bool = False, resolution: str = "") -> dict:
     p = store.get(pid)
     if not p.segments:
         raise ValueError("The project has no script yet.")
@@ -148,6 +156,8 @@ def render(job, pid: str, force: bool = False, keep_build: bool = False) -> dict
         raise RuntimeError("ffmpeg is not installed (`brew install ffmpeg`).")
 
     st = config.load()
+    res = effective_resolution(p, resolution, st)
+    w, h = RESOLUTION_DIMS[res]
     out_root = pathlib.Path(st.output_dir).expanduser()
     vol = out_root.parts[:3] if out_root.parts[1:2] == ("Volumes",) else None
     if vol and not pathlib.Path(*vol).exists():   # don't silently write to the internal disk instead
@@ -164,15 +174,15 @@ def render(job, pid: str, force: bool = False, keep_build: bool = False) -> dict
         job.say(f"Narrating {n + 1}/{len(texts)}", 0.45 * n / max(1, len(texts)))
         audio[key] = narrate(p, text.strip())
 
-    # 2. title cards (pure Pillow, 2x supersampled)
-    job.say("Rendering title cards", 0.50)
+    # 2. title cards (pure Pillow, supersampled)
+    job.say(f"Rendering {res.upper()} title cards", 0.50)
     cards = [s.model_dump(include={"title", "kicker", "sub", "bullets"}) for s in p.segments if s.type == "card"]
-    card_png = render_cards(cards, config.HOME / "cards") if cards else {}
+    card_png = render_cards(cards, config.HOME / "cards", width=w, height=h) if cards else {}
 
-    # 3. compose 1080p MP4 from cards, slides, and captured AGY browser frames
-    job.say("Composing 1080p video", 0.65)
+    # 3. compose MP4 from cards, slides (re-rendered natively at target res if >1080p), and captured AGY browser frames
+    job.say(f"Composing {res.upper()} ({w}x{h}) video", 0.65)
     pieces: list[Still | StepSequence] = []
-    slides_dir = store.sub(p.id, "slides")
+    slides_dir = sources.slides_for_resolution(p, width=w, height=h)
     step_frames_dir = store.sub(p.id, "frames")
     for s in p.segments:
         clip = [audio[s.id]] if s.id in audio else []
@@ -190,13 +200,21 @@ def render(job, pid: str, force: bool = False, keep_build: bool = False) -> dict
                     after_clip=audio.get(f"{s.id}:after"),
                 )
             )
-    name = f"{_slug(p.name)}-{time.strftime('%Y%m%d-%H%M%S')}.mp4"
+    name = f"{_slug(p.name)}-{res}-{time.strftime('%Y%m%d-%H%M%S')}.mp4"
     out = out_root / name
-    secs = compose(pieces, [], [], build / "frames", build / "work", out)
+    secs = compose(pieces, [], [], build / "frames", build / "work", out, width=w, height=h)
     if not keep_build:
         shutil.rmtree(build, ignore_errors=True)
 
-    r = Render(file=str(out), created_at=time.time(), seconds=secs, segments=len(p.segments))
+    r = Render(
+        file=str(out),
+        created_at=time.time(),
+        seconds=secs,
+        segments=len(p.segments),
+        resolution=res,
+        width=w,
+        height=h,
+    )
     store.mutate(pid, lambda q: q.renders.insert(0, r))
     job.say(f"Rendered {secs / 60:.1f} min -> {out}", 1.0)
-    return {"file": str(out), "seconds": secs}
+    return {"file": str(out), "seconds": secs, "resolution": res, "width": w, "height": h}

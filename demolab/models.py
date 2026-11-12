@@ -18,6 +18,24 @@ def new_id(prefix: str = "") -> str:
 
 Scenario = Literal["slides", "website", "hybrid"]
 SourceKind = Literal["url", "repo", "pptx", "pdf", "gslides", "text", "session"]
+Resolution = Literal["1080p", "4k"]
+ProjectResolution = Literal["", "1080p", "4k"]
+RESOLUTION_DIMS: dict[Resolution, tuple[int, int]] = {
+    "1080p": (1920, 1080),
+    "4k": (3840, 2160),
+}
+
+
+def normalize_resolution(value: str | None, default: Resolution = "1080p") -> Resolution:
+    """Normalize resolution strings such as '1080p'/'4k' (or '3840x2160') to '1080p' | '4k'."""
+    raw = (value or "").strip().lower()
+    if not raw:
+        return default
+    if raw in ("1080p", "fhd", "1920x1080"):
+        return "1080p"
+    if raw in ("4k", "2160p", "uhd", "3840x2160"):
+        return "4k"
+    raise ValueError(f"Unsupported resolution {value!r}; expected '1080p' or '4k'.")
 
 
 class Source(BaseModel):
@@ -142,6 +160,9 @@ class Render(BaseModel):
     created_at: float
     seconds: float
     segments: int
+    resolution: Resolution = "1080p"
+    width: int = 1920
+    height: int = 1080
     drive_file_id: str = ""
     drive_url: str = ""
     drive_folder: str = ""
@@ -157,6 +178,7 @@ class Project(BaseModel):
     brief: str = ""            # session + user context the script is built around
     audience: str = ""         # who will watch; empty = the default audience in settings
     instructions: str = ""     # tone, length, things to stress or skip
+    resolution: ProjectResolution = ""  # "" = use Settings.default_resolution
     profile_id: str = ""       # voice profile for this project; empty = the active profile
     voice_id: str = ""         # overrides the profile's voice when set
     voice_style: str = ""      # overrides the profile's style when set

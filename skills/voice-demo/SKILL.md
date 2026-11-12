@@ -1,7 +1,7 @@
 ---
 name: voice-demo
 description: >-
-  Automate grounded, narrated 1080p demo and overview videos in Google Antigravity (and Claude Code) using the
+  Automate grounded, narrated 1080p and 4K demo and overview videos in Google Antigravity (and Claude Code) using the
   user's custom or standard Gemini TTS voice. Supports: (1) slides created in Antigravity + session context +
   user instructions, (2) user-provided slides (Google Slides, PDF, PPTX) + context + directions, and (3) live
   website walkthroughs (e.g. console.cloud.google.com) executed 100% inside Antigravity's built-in browser with
@@ -10,7 +10,7 @@ description: >-
 
 # Voice Demo Lab (Google Antigravity Plugin)
 
-Voice Demo Lab automates high-quality 1080p narrated demo and overview videos completely orchestrated by **Google Antigravity** (primary) and compatible with Claude Code.
+Voice Demo Lab automates high-quality **1080p (`1920×1080`)** and **4K (`3840×2160`)** narrated demo and overview videos completely orchestrated by **Google Antigravity** (primary) and compatible with Claude Code.
 
 - **Plugin-only**: No standalone user CLI, no external Playwright browser windows.
 - **Studio Sidecar Panel**: Always surface `[Voice Demo Studio](sidecar://custom-voice-demo-lab/studio/)` on its own line in chat so the user can open the Studio in Antigravity's auxiliary side pane with one click.
@@ -143,7 +143,7 @@ For projects with `step` segments (either before or right after script approval,
 ### Step 8: Readiness Check & Final Render (`check_demo_readiness` -> `render`)
 1. Call `get_project(project_id)` first to pick up any line edits or pacing tweaks the user made in Voice Demo Studio.
 2. Call `check_demo_readiness(project_id)` and resolve any `blockers` (unapproved script, missing step frames, unverified login).
-3. Call `render(project_id, wait=True)` (or `wait=False` + `get_job` for very long videos).
+3. Call `render(project_id, resolution="1080p" | "4k", wait=True)` (omit `resolution` to use the project/settings default; pass `wait=False` + `get_job` for very long videos). `.pptx` and `.pdf` slide decks natively re-rasterize at `3840×2160` for `4k`.
 4. Share the rendered `.mp4` clickable `file://` link and remind the user they can watch or download it directly in the **Render** tab of `[Voice Demo Studio](sidecar://custom-voice-demo-lab/studio/)`.
 
 ---
