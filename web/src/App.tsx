@@ -12,25 +12,32 @@ export default function App() {
   const loc = useLocation();
   useEffect(() => { api.settings().then(setSettings).catch(() => {}); }, [loc.pathname]);
 
-  // Sync dark mode with Antigravity host theme-change events or system preference
+  // Sync dark mode with Antigravity host theme-change CSS variables or system preference
   useEffect(() => {
-    const syncSystem = () => {
+    const syncFromHostOrSystem = () => {
+      const rootBg = document.documentElement.style.getPropertyValue("--background").trim();
+      if (rootBg) {
+        const probe = document.createElement("span");
+        probe.style.cssText = "position:absolute;visibility:hidden;color:var(--background)";
+        document.documentElement.appendChild(probe);
+        const computed = getComputedStyle(probe).color;
+        probe.remove();
+        const nums = (computed.match(/[\d.]+/g) || []).map(Number);
+        if (nums.length >= 3) {
+          const scale = computed.startsWith("color(") ? 1 : 255;
+          const [r, g, b] = nums.slice(0, 3).map((v) => v / scale);
+          const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+          document.documentElement.classList.toggle("dark", lum < 0.5);
+          return;
+        }
+      }
       const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches;
       document.documentElement.classList.toggle("dark", Boolean(prefersDark));
     };
-    syncSystem();
-    const onMsg = (ev: MessageEvent) => {
-      if (ev.data?.type === "theme-change") {
-        const bg = String(ev.data.payload?.cssVariables?.["--background"] || "").trim().toLowerCase();
-        if (bg.startsWith("#") && bg.length >= 4) {
-          const hex = bg.length === 4 ? bg[1] + bg[1] : bg.slice(1, 3);
-          const lum = parseInt(hex, 16);
-          if (!Number.isNaN(lum)) document.documentElement.classList.toggle("dark", lum < 128);
-        }
-      }
-    };
-    window.addEventListener("message", onMsg);
-    return () => window.removeEventListener("message", onMsg);
+    syncFromHostOrSystem();
+    const obs = new MutationObserver(syncFromHostOrSystem);
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["style"] });
+    return () => obs.disconnect();
   }, []);
 
   const ready = settings && !settings.setup_needed;
@@ -93,6 +100,7 @@ export default function App() {
           <Route path="/" element={<Projects settings={settings} />} />
           <Route path="/settings" element={<SettingsPage onChange={setSettings} />} />
           <Route path="/projects/:id" element={<ProjectPage />} />
+          <Route path="*" element={<Projects settings={settings} />} />
         </Routes>
       </main>
     </div>

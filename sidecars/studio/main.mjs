@@ -3,20 +3,39 @@
  *
  * Bridges Antigravity's Sidecar SDK (`window.sidecar`, `/preload.js`, `/_sidecar/*`,
  * `X-Sidecar-Token` verification) with the local Python `demolab` service (`launch.sh ensure`),
- * including full binary/Range streaming for Gemini TTS WAV previews and rendered 1080p MP4s.
+ * serving static Studio assets directly from disk (0ms cold latency) and streaming binary/Range
+ * responses for Gemini TTS WAV previews and rendered 1080p MP4s.
  */
 
-import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { createServer, request as httpRequest } from 'node:http';
-import { dirname, join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { createServer, get as httpGet, request as httpRequest } from 'node:http';
+import { homedir } from 'node:os';
+import { dirname, extname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SidecarApp } from 'sidecar_sdk';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = join(__dirname, '..', '..');
-const STATIC_INDEX = join(PLUGIN_ROOT, 'demolab', 'static', 'index.html');
+const STATIC_DIR = join(PLUGIN_ROOT, 'demolab', 'static');
+const STATIC_INDEX = join(STATIC_DIR, 'index.html');
 const LAUNCH_SH = join(PLUGIN_ROOT, 'scripts', 'launch.sh');
+const DEMOLAB_HOME = process.env.DEMOLAB_HOME || join(homedir(), '.demolab');
+const PORT_FILE = join(DEMOLAB_HOME, 'port');
+
+const MIME_TYPES = {
+  '.js': 'application/javascript; charset=utf-8',
+  '.mjs': 'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.woff2': 'font/woff2',
+};
 
 const sdkDir = dirname(fileURLToPath(import.meta.resolve('sidecar_sdk')));
 const preloadPath = existsSync(join(sdkDir, 'preload.js'))
@@ -29,20 +48,96 @@ const WEB_PORT = parseInt(process.env.ANTIGRAVITY_SIDECAR_WEB_PORT || '0', 10);
 const UI_TOKEN = process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN || '';
 
 let cachedBackend = null; // { hostname, port }
+let inflightEnsure = null; // Promise<{ hostname, port }>
 
-function ensureBackend(force = false) {
+function probeHealth(port) {
+  return new Promise((resolve) => {
+    if (!port || port <= 0) return resolve(false);
+    const req = httpGet(
+      { hostname: '127.0.0.1', port, path: '/api/health', timeout: 800 },
+      (res) => {
+        let raw = '';
+        res.on('data', (c) => { raw += c; });
+        res.on('end', () => {
+          try {
+            resolve(res.statusCode === 200 && JSON.parse(raw)?.app === 'demolab');
+          } catch {
+            resolve(false);
+          }
+        });
+      }
+    );
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.on('error', () => resolve(false));
+  });
+}
+
+async function discoverRunningBackend() {
+  const candidates = [];
+  if (process.env.DEMOLAB_PORT) {
+    candidates.push(parseInt(process.env.DEMOLAB_PORT, 10));
+  }
+  try {
+    const saved = parseInt(readFileSync(PORT_FILE, 'utf-8').trim(), 10);
+    if (saved && !candidates.includes(saved)) candidates.push(saved);
+  } catch {
+    // port file may not exist yet
+  }
+  if (!candidates.includes(8765)) candidates.push(8765);
+
+  for (const port of candidates) {
+    if (await probeHealth(port)) {
+      return { hostname: '127.0.0.1', port };
+    }
+  }
+  return null;
+}
+
+function spawnEnsureBackend() {
+  return new Promise((resolve, reject) => {
+    execFile(
+      '/bin/sh',
+      [LAUNCH_SH, 'ensure'],
+      { encoding: 'utf-8', env: process.env, timeout: 45_000 },
+      (err, stdout, stderr) => {
+        if (err) {
+          return reject(new Error((stderr || err.message || 'launch.sh ensure failed').trim()));
+        }
+        try {
+          const lastLine = String(stdout || '').trim().split('\n').pop().trim();
+          const parsed = new URL(lastLine);
+          resolve({
+            hostname: parsed.hostname || '127.0.0.1',
+            port: parseInt(parsed.port || '8765', 10),
+          });
+        } catch (parseErr) {
+          reject(new Error(`Invalid backend URL from launch.sh: ${parseErr.message}`));
+        }
+      }
+    );
+  });
+}
+
+async function ensureBackend(force = false) {
   if (cachedBackend && !force) return cachedBackend;
-  const out = execFileSync('/bin/sh', [LAUNCH_SH, 'ensure'], {
-    encoding: 'utf-8',
-    env: process.env,
-    timeout: 45_000,
-  }).trim();
-  const parsed = new URL(out.split('\n').pop().trim());
-  cachedBackend = {
-    hostname: parsed.hostname || '127.0.0.1',
-    port: parseInt(parsed.port || '8765', 10),
-  };
-  return cachedBackend;
+  if (inflightEnsure) return inflightEnsure;
+
+  inflightEnsure = (async () => {
+    try {
+      const existing = await discoverRunningBackend();
+      if (existing) {
+        cachedBackend = existing;
+        return existing;
+      }
+      const started = await spawnEnsureBackend();
+      cachedBackend = started;
+      return started;
+    } finally {
+      inflightEnsure = null;
+    }
+  })();
+
+  return inflightEnsure;
 }
 
 function validToken(req, url) {
@@ -69,28 +164,63 @@ function readJsonBody(req) {
   });
 }
 
-function serveSpaIndex(res) {
+function serveStaticAsset(pathname, res) {
+  try {
+    if (!existsSync(STATIC_DIR)) return false;
+    const rootReal = realpathSync(STATIC_DIR);
+    const candidate = join(rootReal, decodeURIComponent(pathname));
+    if (!existsSync(candidate)) return false;
+    const real = realpathSync(candidate);
+    const prefix = rootReal.endsWith(sep) ? rootReal : rootReal + sep;
+    if (!real.startsWith(prefix) || !statSync(real).isFile()) return false;
+
+    const ext = extname(real).toLowerCase();
+    const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+    const body = readFileSync(real);
+    res.writeHead(200, {
+      'Content-Type': contentType,
+      'Content-Length': body.length,
+      'Cache-Control': pathname.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache',
+    });
+    res.end(body);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function serveSpaIndex(res, url) {
   if (!existsSync(STATIC_INDEX)) {
     res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('Voice Demo Studio static bundle is missing (demolab/static/index.html).');
     return;
   }
   let html = readFileSync(STATIC_INDEX, 'utf-8');
+  const reqToken = url.searchParams.get('token') || '';
   if (!html.includes('/preload.js')) {
     html = html.replace('<head>', '<head>\n    <script src="/preload.js"></script>');
   }
+  if (reqToken) {
+    const suffix = `?token=${encodeURIComponent(reqToken)}`;
+    html = html
+      .replace(/(src="\/assets\/[^"?]+)"/g, `$1${suffix}"`)
+      .replace(/(href="\/assets\/[^"?]+)"/g, `$1${suffix}"`);
+  }
+  const buf = Buffer.from(html, 'utf-8');
   res.writeHead(200, {
     'Content-Type': 'text/html; charset=utf-8',
+    'Content-Length': buf.length,
     'Cache-Control': 'no-cache',
   });
-  res.end(html);
+  res.end(buf);
 }
 
-function proxyToBackend(req, res, url, retried = false) {
+async function proxyToBackend(req, res, url, retried = false) {
   let target;
   try {
-    target = ensureBackend(retried);
+    target = await ensureBackend(retried);
   } catch (err) {
+    console.error(`[voice-demo-studio] backend start failed: ${err.message}`);
     res.writeHead(502, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ detail: `Failed to start Voice Demo Lab backend: ${err.message}` }));
     return;
@@ -107,6 +237,7 @@ function proxyToBackend(req, res, url, retried = false) {
   fwdHeaders.host = `${target.hostname}:${target.port}`;
   delete fwdHeaders.origin;
   delete fwdHeaders['x-sidecar-token'];
+  delete fwdHeaders.connection;
 
   const upstream = httpRequest(
     {
@@ -117,17 +248,21 @@ function proxyToBackend(req, res, url, retried = false) {
       headers: fwdHeaders,
     },
     (upRes) => {
-      res.writeHead(upRes.statusCode || 200, upRes.headers);
+      const outHeaders = { ...upRes.headers };
+      delete outHeaders.connection;
+      delete outHeaders['keep-alive'];
+      res.writeHead(upRes.statusCode || 200, outHeaders);
       upRes.pipe(res);
     }
   );
 
   upstream.on('error', (err) => {
+    cachedBackend = null;
     if (!retried && (req.method === 'GET' || req.method === 'HEAD')) {
       proxyToBackend(req, res, url, true);
       return;
     }
-    cachedBackend = null;
+    console.error(`[voice-demo-studio] proxy error on ${url.pathname}: ${err.message}`);
     if (!res.headersSent) {
       res.writeHead(502, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ detail: `Backend proxy error: ${err.message}` }));
@@ -149,8 +284,13 @@ const server = createServer(async (req, res) => {
   }
 
   if (req.method === 'GET' && url.pathname === '/preload.js') {
-    res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8' });
-    res.end(PRELOAD_JS);
+    const buf = Buffer.from(PRELOAD_JS, 'utf-8');
+    res.writeHead(200, {
+      'Content-Type': 'application/javascript; charset=utf-8',
+      'Content-Length': buf.length,
+      'Cache-Control': 'no-cache',
+    });
+    res.end(buf);
     return;
   }
 
@@ -178,19 +318,24 @@ const server = createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(out));
     } catch (err) {
+      console.error(`[voice-demo-studio] sidecar API error (${url.pathname}): ${err.message}`);
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));
     }
     return;
   }
 
-  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/assets/')) {
-    proxyToBackend(req, res, url);
+  if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname.startsWith('/assets/')) {
+    if (serveStaticAsset(url.pathname, res)) return;
+  }
+
+  if (url.pathname.startsWith('/api/')) {
+    await proxyToBackend(req, res, url);
     return;
   }
 
   if (req.method === 'GET' || req.method === 'HEAD') {
-    serveSpaIndex(res);
+    serveSpaIndex(res, url);
     return;
   }
 
@@ -200,12 +345,8 @@ const server = createServer(async (req, res) => {
 
 server.listen(WEB_PORT, '127.0.0.1', () => {
   console.log(`[voice-demo-studio] listening on 127.0.0.1:${server.address().port}`);
-  // Warm the Python backend asynchronously so the first API call is instant
-  setTimeout(() => {
-    try {
-      ensureBackend(false);
-    } catch (err) {
-      console.error('[voice-demo-studio] initial backend warm warning:', err.message);
-    }
-  }, 50);
+  // Warm the Python backend non-blockingly in the background
+  ensureBackend(false).catch((err) => {
+    console.error('[voice-demo-studio] initial backend warm warning:', err.message);
+  });
 });

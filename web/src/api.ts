@@ -29,7 +29,17 @@ function resolveSidecarToken(): string {
 const INITIAL_SIDECAR_TOKEN = resolveSidecarToken();
 
 export function inAntigravitySidecar(): boolean {
-  return typeof window !== "undefined" && Boolean(window.sidecar?.agent);
+  if (typeof window === "undefined") return false;
+  if (window.sidecar?.agent) return true;
+  const sp = new URLSearchParams(window.location.search);
+  return Boolean(INITIAL_SIDECAR_TOKEN || sp.get("conversationId"));
+}
+
+function withTokenQuery(url: string): string {
+  const token = resolveSidecarToken() || INITIAL_SIDECAR_TOKEN;
+  if (!token) return url;
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}token=${encodeURIComponent(token)}`;
 }
 
 export async function sendToAntigravity(message: string): Promise<boolean> {
@@ -234,7 +244,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
     init.body = JSON.stringify(body);
     init.headers = authHeaders({ "Content-Type": "application/json" });
   }
-  const r = await fetch(path, init);
+  const r = await fetch(withTokenQuery(path), init);
   if (!r.ok) {
     let msg = `${r.status} ${r.statusText}`;
     try { msg = (await r.json()).detail ?? msg; } catch { /* not json */ }
@@ -250,7 +260,7 @@ export const api = {
   models: () => req<{ name: string; display?: string; methods: string[] }[]>("GET", "/api/models"),
   preview: (text: string, w: PreviewWith = {}) => req<Blob>("POST", "/api/voice/preview", { text, ...w }),
   testClip: async (text: string, w: PreviewWith) => {
-    const r = await fetch("/api/voice/preview", {
+    const r = await fetch(withTokenQuery("/api/voice/preview"), {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ text, ...w }),
@@ -291,10 +301,10 @@ export const api = {
   reveal: (id: string, i: number) => req("POST", `/api/projects/${id}/renders/${i}/reveal`),
 };
 
-export const slideUrl = (pid: string, n: number) => `/api/projects/${pid}/slides/${n}`;
-export const frameUrl = (pid: string, name: string) => `/api/projects/${pid}/frames/${name}`;
-export const checkUrl = (pid: string, name: string) => `/api/projects/${pid}/checks/${name}`;
-export const videoUrl = (pid: string, i: number) => `/api/projects/${pid}/renders/${i}/video`;
+export const slideUrl = (pid: string, n: number) => withTokenQuery(`/api/projects/${pid}/slides/${n}`);
+export const frameUrl = (pid: string, name: string) => withTokenQuery(`/api/projects/${pid}/frames/${encodeURIComponent(name)}`);
+export const checkUrl = (pid: string, name: string) => withTokenQuery(`/api/projects/${pid}/checks/${encodeURIComponent(name)}`);
+export const videoUrl = (pid: string, i: number) => withTokenQuery(`/api/projects/${pid}/renders/${i}/video`);
 
 export const newAction = (op: ActionOp = "click"): Action =>
   ({ op, selector: "", target: "", value: "", seconds: 0, ff: false, what: "", label: "" });
@@ -320,8 +330,14 @@ export const newSegment = (type: SegType): Segment => ({
 /** ~130 words per minute at 1.0x over a whole video (pauses included). */
 export const speakSeconds = (text: string, speed = 1) => (text.trim() ? text.trim().split(/\s+/).length / 2.2 / speed : 0);
 
-const regionNames = typeof Intl !== "undefined" && "DisplayNames" in Intl
-  ? new Intl.DisplayNames(undefined, { type: "language" }) : null;
+let regionNames: Intl.DisplayNames | null = null;
+try {
+  if (typeof Intl !== "undefined" && "DisplayNames" in Intl) {
+    regionNames = new Intl.DisplayNames(["en"], { type: "language" });
+  }
+} catch {
+  regionNames = null;
+}
 
 export function localeName(code: string): string {
   if (!code) return "Multilingual";

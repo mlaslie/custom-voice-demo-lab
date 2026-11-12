@@ -3,12 +3,33 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Voice Demo Lab</title>
+    <title>Voice Demo Studio</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%231a73e8'/><path d='M9 12v8M13 9v14M17 12v8M21 14v4' stroke='white' stroke-width='2.4' stroke-linecap='round'/></svg>" />
-    <script type="module" crossorigin src="/assets/index-D2qGPWrq.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-DUQEFVQC.css">
+    <style>
+      .vdl-boot { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:60vh; gap:10px; padding:24px; text-align:center; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; color:var(--foreground,#52525b); }
+      .vdl-dot { width:26px; height:26px; border-radius:8px; background:linear-gradient(135deg,#1a73e8,#10b981); opacity:0.9; animation:vdl-pulse 1.2s ease-in-out infinite; }
+      @keyframes vdl-pulse { 0%,100% { transform:scale(1); opacity:0.85; } 50% { transform:scale(0.92); opacity:0.5; } }
+    </style>
+    <script defer src="/assets/index-Dqle-D5K.js"></script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="vdl-boot" id="vdl-boot">
+        <div class="vdl-dot"></div>
+        <div style="font-size:13px;font-weight:600;">Loading Voice Demo Studio…</div>
+      </div>
+    </div>
+    <script>
+      window.addEventListener("error", function (ev) {
+        var boot = document.getElementById("vdl-boot");
+        if (boot) {
+          boot.innerHTML = '<div style="max-width:360px;font-size:12px;line-height:1.5;">' +
+            '<div style="font-weight:600;margin-bottom:6px;">Voice Demo Studio failed to initialize</div>' +
+            '<div style="opacity:0.75;margin-bottom:10px;">' + String(ev.message || "Asset load error") + '</div>' +
+            '<button onclick="location.reload()" style="padding:6px 12px;border-radius:8px;border:1px solid #d4d4d8;background:#1a73e8;color:#fff;font-size:12px;cursor:pointer;">Reload Studio</button>' +
+            '</div>';
+        }
+      });
+    </script>
   </body>
 </html>

@@ -15,8 +15,14 @@ export default function Projects({ settings }: { settings: Settings | null }) {
   const [err, setErr] = useState("");
   const [sentPrompt, setSentPrompt] = useState("");
 
-  const load = () => api.projects().then(setList).catch((e) => setErr(e.message));
-  useEffect(() => { load(); }, []);
+  const load = () => api.projects().then((res) => { setList(res); setErr(""); }).catch((e) => setErr(e.message));
+  useEffect(() => {
+    load();
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible") load();
+    }, 4000);
+    return () => clearInterval(id);
+  }, []);
 
   const remove = async (id: string, name: string) => {
     if (!confirm(`Delete "${name}"? Its script, slides and audio cache are removed; rendered MP4 videos stay on disk.`)) return;

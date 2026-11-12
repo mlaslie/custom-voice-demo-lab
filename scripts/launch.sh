@@ -14,5 +14,10 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 command -v uv >/dev/null 2>&1 || { echo "Voice Demo Lab plugin needs uv (https://docs.astral.sh/uv/)." >&2; exit 1; }
 mkdir -p "$HOME_DIR"
-uv sync --project "$ROOT" --frozen --no-dev --quiet >&2
+STAMP_FILE="$UV_PROJECT_ENVIRONMENT/.demolab-sync-stamp"
+LOCK_SIG="$(cksum "$ROOT/pyproject.toml" "$ROOT/uv.lock" 2>/dev/null | tr '\n' ';')"
+if [ ! -x "$UV_PROJECT_ENVIRONMENT/bin/python" ] || [ ! -f "$STAMP_FILE" ] || [ "$(cat "$STAMP_FILE" 2>/dev/null)" != "$LOCK_SIG" ]; then
+  uv sync --project "$ROOT" --frozen --no-dev --quiet >&2
+  printf "%s" "$LOCK_SIG" > "$STAMP_FILE" 2>/dev/null || true
+fi
 exec uv run --project "$ROOT" --frozen --no-sync python -m demolab "$@"
