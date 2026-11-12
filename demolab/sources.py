@@ -1,11 +1,12 @@
-"""Decks the session worked with (PowerPoint or PDF files) become slide images for slide segments,
-plus a text digest of each slide and its speaker notes for the session's model to write from.
+"""Slide deck ingestion: Google Slides (via gslides CLI or exported PDF+JSON), PowerPoint (.pptx), and PDF.
 
 Slides from every deck are appended to the project's slides/ folder as 1920x1080 PNGs; a deck remembers its
-slide_offset so the script can refer to slides by a single project-wide index.
+slide_offset so the script can refer to slides by a single project-wide index, alongside a rich digest of
+every slide's text and speaker notes.
 """
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import re
@@ -20,6 +21,7 @@ from . import store
 from .models import Project, Source
 
 W, H = 1920, 1080
+_GSLIDES_ID_RE = re.compile(r"docs\.google\.com/presentation/d/([A-Za-z0-9_-]+)")
 
 
 def _letterbox(img: Image.Image) -> Image.Image:
@@ -60,14 +62,145 @@ def _slides_digest(texts: list[str], notes: list[str], offset: int) -> str:
     return "\n".join(out)
 
 
+# ---- Google Slides AST helpers ------------------------------------------------------------------
+
+def _shape_text(el: dict) -> str:
+    runs = []
+    for te in el.get("shape", {}).get("text", {}).get("textElements", []):
+        content = te.get("textRun", {}).get("content", "")
+        if content:
+            runs.append(content)
+    if runs:
+        return "".join(runs).strip()
+    tbl = el.get("table")
+    if tbl:
+        rows = []
+        for row in tbl.get("tableRows", []):
+            cells = []
+            for cell in row.get("tableCells", []):
+                c_runs = [
+                    te.get("textRun", {}).get("content", "")
+                    for te in cell.get("text", {}).get("textElements", [])
+                ]
+                cells.append("".join(c_runs).strip().replace("\n", " "))
+            if any(cells):
+                rows.append(" | ".join(cells))
+        return "\n".join(rows)
+    return ""
+
+
+def parse_gslides_ast(data: dict) -> tuple[str, list[str], list[str]]:
+    """Extract (presentation_title, slide_texts, speaker_notes) from a Google Slides API JSON object."""
+    title = data.get("title", "")
+    texts: list[str] = []
+    notes: list[str] = []
+    for sl in data.get("slides", []):
+        parts = [t for el in sl.get("pageElements", []) if (t := _shape_text(el))]
+        texts.append("\n".join(parts))
+        note_parts = []
+        notes_page = sl.get("slideProperties", {}).get("notesPage", {})
+        for el in notes_page.get("pageElements", []):
+            ph_type = el.get("shape", {}).get("placeholder", {}).get("type", "")
+            if ph_type == "SLIDE_IMAGE":
+                continue
+            nt = _shape_text(el)
+            if nt:
+                note_parts.append(nt)
+        notes.append("\n".join(note_parts))
+    return title, texts, notes
+
+
+def _find_gslides_cli() -> str | None:
+    found = shutil.which("gslides")
+    if found:
+        return found
+    home = pathlib.Path.home()
+    candidates = [
+        home / ".gemini" / "antigravity" / "bin" / "gslides",
+        home / ".gemini" / "config" / "plugins" / "gslides" / "skills" / "gslides" / "scripts" / "gslides",
+    ]
+    for c in candidates:
+        if c.is_file() and os.access(c, os.X_OK):
+            return str(c)
+    return None
+
+
+def extract_gslides_id(ref: str) -> str | None:
+    ref = ref.strip()
+    m = _GSLIDES_ID_RE.search(ref)
+    if m:
+        return m.group(1)
+    if ref.startswith("gslides:"):
+        return ref.split(":", 1)[1].strip()
+    return None
+
+
 # ---- per kind -----------------------------------------------------------------------------------
 
-def add_pdf(p: Project, path: pathlib.Path, label: str = "") -> Source:
-    src = Source(kind="pdf", label=label or path.name, ref=str(path))
-    imgs, texts = _render_pdf(path)
+def add_pdf(p: Project, path: pathlib.Path, label: str = "", gslides_json: pathlib.Path | None = None) -> Source:
+    """Ingest a PDF deck, optionally enriched with speaker notes from a sibling `.gslides.json` AST file."""
+    sidecar = gslides_json
+    if sidecar is None:
+        for cand in (path.with_suffix(".gslides.json"), path.with_suffix(".json")):
+            if cand.is_file():
+                sidecar = cand
+                break
+    notes: list[str] = []
+    ast_texts: list[str] = []
+    ast_title = ""
+    if sidecar and sidecar.is_file():
+        try:
+            ast_title, ast_texts, notes = parse_gslides_ast(json.loads(sidecar.read_text()))
+        except Exception:
+            notes = []
+
+    src = Source(
+        kind="gslides" if ast_title or notes else "pdf",
+        label=label or ast_title or path.name,
+        ref=str(path),
+    )
+    imgs, pdf_texts = _render_pdf(path)
     _add_slides(p, imgs, src)
-    src.text = _slides_digest(texts, [], src.slide_offset)
+    final_texts = [
+        (ast_texts[i] if i < len(ast_texts) and ast_texts[i].strip() else pdf_texts[i])
+        for i in range(len(pdf_texts))
+    ]
+    src.text = _slides_digest(final_texts, notes, src.slide_offset)
     return src
+
+
+def add_gslides(p: Project, pres_id: str, label: str = "") -> Source:
+    """Export a Google Slides presentation directly via `gslides` CLI (PDF images + JSON speaker notes)."""
+    cli = _find_gslides_cli()
+    if not cli:
+        raise ValueError(
+            f"Google Slides CLI (`gslides`) is not installed to read presentation {pres_id}. "
+            f"In Antigravity, export the deck first with `gslides readonly export {pres_id} deck.pdf --format pdf` "
+            f"and `gslides readonly info {pres_id} --json > deck.gslides.json`, then pass `deck.pdf`."
+        )
+    tmp = pathlib.Path(tempfile.mkdtemp(prefix="demolab-gslides-"))
+    pdf_path = tmp / f"{pres_id}.pdf"
+    json_path = tmp / f"{pres_id}.gslides.json"
+    try:
+        r_pdf = subprocess.run([cli, "readonly", "export", pres_id, str(pdf_path), "--format", "pdf"],
+                               capture_output=True, text=True, timeout=90)
+        if r_pdf.returncode != 0 or not pdf_path.exists():
+            detail = (r_pdf.stderr or r_pdf.stdout).strip()[:300]
+            raise ValueError(
+                f"Direct `gslides` export could not access presentation {pres_id} ({detail or 'auth required in agent shell'}). "
+                f"Run in your Antigravity shell: `gslides readonly export {pres_id} /tmp/{pres_id}.pdf --format pdf && "
+                f"gslides readonly info {pres_id} --json > /tmp/{pres_id}.gslides.json`, then pass `/tmp/{pres_id}.pdf`."
+            )
+        r_info = subprocess.run([cli, "readonly", "info", pres_id, "--json"],
+                                capture_output=True, text=True, timeout=60)
+        if r_info.returncode == 0 and r_info.stdout.strip().startswith("{"):
+            json_path.write_text(r_info.stdout)
+        src = add_pdf(p, pdf_path, label=label, gslides_json=json_path if json_path.exists() else None)
+        src.kind = "gslides"
+        src.ref = f"https://docs.google.com/presentation/d/{pres_id}/edit"
+        return src
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def add_pptx(p: Project, path: pathlib.Path, label: str = "") -> Source:
@@ -123,8 +256,7 @@ def _keynote_error(stderr: str) -> str:
 
 
 def _pptx_to_pdf(path: pathlib.Path) -> tuple[pathlib.Path | None, str]:
-    """Slide images need a PDF: LibreOffice if installed, else Keynote on macOS (asks once for permission).
-    Returns (pdf, "") or (None, why it could not be made)."""
+    """Slide images need a PDF: LibreOffice if installed, else Keynote on macOS."""
     soffice = shutil.which("soffice") or next(
         (x for x in ["/Applications/LibreOffice.app/Contents/MacOS/soffice"] if os.path.exists(x)), None)
     out = pathlib.Path(tempfile.mkdtemp(prefix="demolab-pptx-"))
@@ -152,17 +284,18 @@ def _pptx_to_pdf(path: pathlib.Path) -> tuple[pathlib.Path | None, str]:
     return None, _keynote_error(r.stderr)
 
 
-def add_deck(p: Project, ref: str, label: str = "") -> Source:
-    """A .pptx or .pdf file. (Google Slides: export it to one of these with the host's own tools first.)"""
-    if "docs.google.com/presentation" in ref:
-        raise ValueError("Google Slides decks are not read directly: export the deck as a PDF or .pptx file "
-                         "(with your Google Drive or Slides tools, or File > Download) and pass that path.")
+def add_deck(p: Project, ref: str, label: str = "", gslides_json: str = "") -> Source:
+    """Ingest a Google Slides URL / `gslides:<ID>`, `.pdf` (with optional `.gslides.json` notes), or `.pptx`."""
+    pres_id = extract_gslides_id(ref)
+    if pres_id:
+        return add_gslides(p, pres_id, label=label)
     path = pathlib.Path(ref).expanduser()
     if not path.is_file():
         raise FileNotFoundError(f"No such deck: {path}")
     ext = path.suffix.lower()
     if ext == ".pdf":
-        return add_pdf(p, path, label)
+        sidecar = pathlib.Path(gslides_json).expanduser() if gslides_json else None
+        return add_pdf(p, path, label, gslides_json=sidecar)
     if ext == ".pptx":
         return add_pptx(p, path, label)
-    raise ValueError(f"Unsupported deck type {ext}: use a .pptx or .pdf file")
+    raise ValueError(f"Unsupported deck type {ext}: use a Google Slides URL, .pptx, or .pdf file")

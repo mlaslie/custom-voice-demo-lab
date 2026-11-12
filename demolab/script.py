@@ -1,6 +1,7 @@
-"""The narration script is written by the coding session's own model (Claude, Gemini in Antigravity), which
-already knows the code, slides or app it analyzed. This module gives that model the house style and format
-(GUIDE) and checks what it writes (validate) before the user reviews it and TTS voices it.
+"""Script authoring guide (`GUIDE`) and validator (`validate`).
+
+The narration script is authored by Google Antigravity (or Claude Code) after researching the topic against
+authoritative technical docs, recent blogs/announcements, videos, slide decks, and live website state.
 """
 from __future__ import annotations
 
@@ -13,54 +14,104 @@ from .models import Project, Segment
 WORDS_PER_SECOND = 2.2     # measured on the approved narrator style, pauses included
 
 GUIDE = """\
-# Writing a Voice Demo Lab script
+# Writing a Grounded Voice Demo Lab Script (Google Antigravity First)
 
-You write the narration for a demo video. A text-to-speech voice reads it aloud. Write it from what you
-learned in this session (the code, slides, app or notes you analyzed with the user). Do not invent features,
-numbers or results that the session did not establish.
+You write the narration and visual choreography for an automated 1080p demo/overview video voiced by Gemini TTS.
 
-## Format
-Pass write_script a JSON list of segments, in playing order. Each segment is one of:
+## 1. Ground Every Claim in Reality First (`save_research`)
+Before calling `write_script`, verify technical capabilities, product names, architecture details, CLI/API
+syntax, release dates, and metrics against authoritative sources:
+- Official technical documentation & API references
+- Recent launch announcements, Google Cloud / engineering blogs, and release notes
+- Walkthrough videos, session context, slide text & speaker notes, and live UI state
+Save your verified findings with `save_research(project_id, summary, items)` and attach short source labels
+in each segment's `"citations": ["Official Docs: ...", "Slide 3"]` list. Never invent features, benchmarks,
+UI buttons, or URLs that were not verified.
 
-- card: a full-screen title card.
-  {"type": "card", "kicker": "SMALL CAPS LABEL", "title": "Title", "sub": "optional subtitle",
-   "bullets": ["optional", "bullets"], "narration": "spoken while it shows"}
-- slide: shows slide N of the project's decks while narrating (0-based, project-wide; start_demo and
-  get_project list the slides with their text and speaker notes).
-  {"type": "slide", "slide": 0, "narration": "..."}
-- step: a live web-app step, recorded in a real browser on the project's base_url.
-  {"type": "step", "title": "short label", "narration": "said first: what this step does and why",
-   "actions": [ ... ], "actions_at": "during" | "after",
-   "after_narration": "said once the actions finish: how the result on screen shows it worked",
-   "notes": "for the reviewer, not spoken"}
+## 2. Supported Scenarios
+- `slides` (Scenario 1 & 2): In-AGY created slides or user-provided slides (Google Slides URL/ID, `.pptx`, `.pdf`)
+  paired with AGY session context and user directions.
+- `website` (Scenario 3): Live website walkthrough (e.g. `https://console.cloud.google.com`, SaaS console, or
+  `localhost` app) orchestrated 100% inside Antigravity's built-in `browser` subagent — after running the
+  login onboarding check (`record_web_auth`).
+- `hybrid`: Combines title cards, slide segments, and live website `step` segments in one cohesive video.
 
-Actions (Playwright; selectors like role=button[name="Save"], text="Exact text", label=Email, or CSS):
-  {"op": "goto", "value": "/path or full URL"}       {"op": "click", "selector": "..."}
-  {"op": "fill", "selector": "...", "value": "text typed visibly"}
-  {"op": "press", "value": "Enter"}                    {"op": "hover", "selector": "..."}
-  {"op": "scroll", "selector": "... or empty for the page"}
-  {"op": "wait", "seconds": 2}
-  {"op": "wait_for", "selector": "... or empty", "value": "text to wait for", "seconds": 120,
-   "ff": true, "what": "Deploying the agent"}    (ff: fast-forward a long wait behind a banner)
-  {"op": "highlight", "selector": "..."} / {"op": "unhighlight"}  (draw attention to a result)
-Take selectors from the source code you read, or from inspect_page; dry_run checks every one.
+## 3. Segment Format (`write_script`)
+Pass `write_script` a JSON list of segments in playing order. Each segment is one of:
 
-## House style (the user's approved defaults; project instructions override them)
-- Open with an intro card, then a spoken introduction: what will be shown and why it matters.
-- A card before each major section or scenario.
-- Each step: say in plain terms what it does, do it, then say how the result matches the goal.
-- End with a recap card whose bullets summarise the key points, narrated. No closing tagline or slogan.
-- Decks: one slide segment per slide, in order, unless the user asks otherwise. Use what the slide
-  and its speaker notes mean; do not read the slide text out verbatim.
-- The audience is new to the subject unless told otherwise: full coverage, high level.
+- `card` — Full-screen Google Cloud styled title/section/recap card (rendered crisp at 1080p):
+  ```json
+  {
+    "type": "card",
+    "kicker": "SMALL CAPS LABEL",
+    "title": "Main Title",
+    "sub": "Optional subtitle",
+    "bullets": ["Optional key point 1", "Optional key point 2"],
+    "narration": "Spoken while this card is on screen.",
+    "citations": ["Launch Blog"]
+  }
+  ```
 
-## Writing for the ear
-- Short sentences. No markdown, bullets, emoji or URLs in narration. Spell out symbols and say numbers
-  the way a person would ("twenty-eight hours", "version two point one").
-- Expand an acronym the first time ("Electronic Health Record, or E H R"); spell out letters that are
-  said one by one ("B M J").
-- About 130 words a minute: a 5-minute video is roughly 650 words of narration.
-- Keep each narration to one idea; split long passages into more segments.
+- `slide` — Displays slide `N` (0-based project-wide index from `start_demo` / `get_project`) while narrating:
+  ```json
+  {
+    "type": "slide",
+    "slide": 0,
+    "title": "Architecture Overview",
+    "narration": "Explain what the slide and speaker notes mean — never read bullet text verbatim.",
+    "citations": ["Slide 1"]
+  }
+  ```
+
+- `step` — Live website walkthrough step executed & captured in Antigravity's built-in `browser` subagent:
+  ```json
+  {
+    "type": "step",
+    "title": "Enable Cloud Healthcare API",
+    "narration": "Spoken while showing the `before` / `during` frames: what we are doing and why.",
+    "actions": [
+      {"op": "goto", "value": "https://console.cloud.google.com/apis/library/healthcare.googleapis.com"},
+      {"op": "click", "target": "Enable button"},
+      {"op": "wait_for", "value": "API enabled", "seconds": 45, "ff": true, "what": "Enabling Healthcare API"}
+    ],
+    "after_narration": "Spoken while showing the `result` frame(s): how the screen confirms success.",
+    "citations": ["Cloud Healthcare API Docs"],
+    "notes": "Reviewer note (not spoken)"
+  }
+  ```
+
+### Actions for In-AGY Browser Steps
+Each action guides Antigravity's `browser` subagent (and shows in Voice Demo Studio for review):
+- `{"op": "goto", "value": "/path or full URL"}`
+- `{"op": "click", "target": "Button or nav item label"}` (alias `"selector"` also accepted)
+- `{"op": "fill", "target": "Input field", "value": "text typed visibly"}`
+- `{"op": "press", "value": "Enter"}` | `{"op": "hover", "target": "..."}` | `{"op": "scroll", "target": "..."}`
+- `{"op": "wait", "seconds": 2}`
+- `{"op": "wait_for", "value": "text/state to wait for", "seconds": 60, "ff": true, "what": "Deploying service"}`
+- `{"op": "highlight", "target": "Result panel"}` | `{"op": "verify", "value": "Expected text on page"}`
+
+When executing a `step` in Antigravity's `browser` subagent, capture clean 16:9 screenshots (`before`,
+`during`, `result`) and attach them via `record_step_frames(project_id, segment_id, frames=[...])` with
+optional `highlight` (`{"x": 0.12, "y": 0.25, "w": 0.45, "h": 0.18, "label": "Active endpoint"}`),
+`zoom_to`, or `ff_what` / `ff_elapsed` for fast-forwarded waits.
+
+## 4. House Style (Project `instructions` Override Defaults)
+- Open with an intro `card`: introduce what will be shown and why it matters.
+- Use a section `card` before major transitions (e.g. moving from slides into the live console demo).
+- For slide decks: cover slides in logical order, synthesizing slide visuals + speaker notes + grounded research
+  rather than reading slide bullets word-for-word.
+- For live web `step`s: state clearly what the step will accomplish (`narration`), show the interaction, then
+  point out the concrete outcome on screen (`after_narration`).
+- End with a narrated recap `card` whose `bullets` summarize 3–4 key takeaways. Skip cheesy taglines.
+
+## 5. Writing for the Ear (Gemini TTS)
+- Short, conversational sentences. **Zero markdown, bullet symbols, backticks, emoji, or raw URLs** in
+  `narration` or `after_narration`.
+- Write numbers, versions, and symbols the way a human speaker says them ("version two point five",
+  "ninety-nine point nine percent", "Google Cloud Console").
+- Expand acronyms on first mention ("Fast Healthcare Interoperability Resources, or F H I R").
+- Pace: ~130 words per minute (~2.2 words/sec). A crisp 3-minute overview is ~390 words; 5 minutes is ~650 words.
+- Keep each segment focused on one clear idea; split long explanations across segments.
 """
 
 _URL = re.compile(r"https?://|www\.", re.I)
@@ -87,18 +138,21 @@ def validate(raw: list[dict], p: Project) -> tuple[list[Segment], list[str], lis
         where += f" ({s.type}{': ' + s.title if s.title else ''})"
         if s.type == "slide":
             if s.slide is None or not 0 <= s.slide < len(p.slides):
-                errors.append(f"{where}: slide must be 0 to {len(p.slides) - 1}" if p.slides
-                              else f"{where}: the project has no slides; attach the deck with start_demo")
+                errors.append(
+                    f"{where}: slide must be 0 to {len(p.slides) - 1}"
+                    if p.slides
+                    else f"{where}: the project has no slides; attach the deck with start_demo"
+                )
         else:
             s.slide = None
         if s.type == "step":
             if not p.base_url:
                 errors.append(f"{where}: web steps need the project's base_url (the app to record)")
-            if not s.actions:
+            if not s.actions and not s.frames:
                 warnings.append(f"{where}: no actions yet; add them, or the step only shows the current page")
             for a in s.actions:
                 if a.op in ("click", "fill", "hover", "highlight") and not a.selector:
-                    errors.append(f"{where}: a {a.op} action needs a selector")
+                    errors.append(f"{where}: a {a.op} action needs a selector or target")
         else:
             s.actions = []
         if not s.narration.strip() and s.type != "step":

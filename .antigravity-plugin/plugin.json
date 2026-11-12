@@ -2,14 +2,14 @@
   "$schema": "https://antigravity.google/schemas/v1/plugin.json",
   "name": "custom-voice-demo-lab",
   "displayName": "Voice Demo Lab",
-  "version": "0.3.3",
-  "description": "Narrated demo videos of web apps and slide decks in your custom Gemini TTS voice: draft the script from slides, code or notes, review and approve it in a local web app, then render.",
+  "version": "0.4.0",
+  "description": "Automate research-grounded 1080p demo and overview videos from slides or live websites in Google Antigravity, voiced in your custom or standard Gemini TTS voice.",
   "suggestedPrompts": [
-    "Make a narrated demo video of the app running on localhost:3000",
-    "Turn this slide deck into a narrated video in my voice",
-    "Open the Voice Demo Lab so I can review the script"
+    "Create a narrated demo video from the slides we built in this session",
+    "Turn this Google Slides deck into a grounded overview video in my custom voice",
+    "Create a walkthrough demo video of console.cloud.google.com using the Antigravity browser"
   ],
   "author": { "name": "Matthew Laslie" },
   "repository": "https://github.com/mlaslie/custom-voice-demo-lab",
-  "keywords": ["demo", "narration", "tts", "gemini", "video", "playwright", "slides"]
+  "keywords": ["antigravity", "demo", "narration", "tts", "gemini", "video", "slides", "browser"]
 }

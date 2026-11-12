@@ -1,6 +1,11 @@
+import json
 import subprocess
 
-from demolab import sources
+import pypdfium2 as pdfium
+import pytest
+
+from demolab import config, sources, store
+from demolab.models import Project
 
 
 def _fake_run(returncode=1, stderr=""):
@@ -13,6 +18,15 @@ def _keynote_only(monkeypatch):
     monkeypatch.setattr(sources.shutil, "which", lambda _: None)
     monkeypatch.setattr(sources.sys, "platform", "darwin")
     monkeypatch.setattr(sources.os.path, "exists", lambda x: x == "/Applications/Keynote.app")
+
+
+def _make_one_page_pdf(path):
+    pdf = pdfium.PdfDocument.new()
+    page = pdf.new_page(960, 540)
+    page.close()
+    with open(path, "wb") as f:
+        pdf.save(f)
+    pdf.close()
 
 
 def test_keynote_failures_explain_themselves(tmp_path, monkeypatch):
@@ -46,8 +60,42 @@ def test_no_converter(tmp_path, monkeypatch):
     assert sources._pptx_to_pdf(tmp_path / "d.pptx") == (None, sources.NO_CONVERTER)
 
 
-def test_google_slides_links_ask_for_an_export():
-    import pytest
-    from demolab.models import Project
-    with pytest.raises(ValueError, match="export the deck as a PDF or .pptx"):
+def test_google_slides_ast_and_sidecar_notes(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "HOME", tmp_path)
+    monkeypatch.setattr(store, "ROOT", tmp_path / "projects")
+    p = store.create("Slides Test")
+
+    pdf_path = tmp_path / "deck.pdf"
+    _make_one_page_pdf(pdf_path)
+    ast = {
+        "title": "Gemini for Healthcare",
+        "slides": [
+            {
+                "pageElements": [
+                    {"shape": {"text": {"textElements": [{"textRun": {"content": "Clinical Search & FHIR\n"}}]}}}
+                ],
+                "slideProperties": {
+                    "notesPage": {
+                        "pageElements": [
+                            {"shape": {"placeholder": {"type": "SLIDE_IMAGE"}}},
+                            {"shape": {"text": {"textElements": [{"textRun": {"content": "Emphasize HIPAA compliance."}}]}}},
+                        ]
+                    }
+                },
+            }
+        ],
+    }
+    (tmp_path / "deck.gslides.json").write_text(json.dumps(ast))
+
+    src = sources.add_deck(p, str(pdf_path))
+    assert src.kind == "gslides"
+    assert src.label == "Gemini for Healthcare"
+    assert src.slide_count == 1
+    assert "Clinical Search & FHIR" in src.text
+    assert "Emphasize HIPAA compliance." in src.text
+
+
+def test_google_slides_url_without_cli_gives_agy_export_command(monkeypatch):
+    monkeypatch.setattr(sources, "_find_gslides_cli", lambda: None)
+    with pytest.raises(ValueError, match="gslides readonly export abc123"):
         sources.add_deck(Project(name="t"), "https://docs.google.com/presentation/d/abc123/edit")

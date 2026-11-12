@@ -1,15 +1,75 @@
+export type Scenario = "slides" | "website" | "hybrid";
 export type SegType = "card" | "slide" | "step";
 export type ActionOp =
-  | "goto" | "click" | "fill" | "press" | "hover" | "scroll" | "wait" | "wait_for" | "highlight" | "unhighlight";
+  | "goto" | "click" | "fill" | "press" | "hover" | "scroll" | "wait" | "wait_for" | "highlight" | "unhighlight" | "verify";
+
+declare global {
+  interface Window {
+    sidecar?: {
+      conversationId?: string | null;
+      agent?: {
+        sendMessage: (message: string, convId?: string) => Promise<unknown>;
+        startConversation: (message: string, title?: string) => Promise<unknown>;
+      };
+    };
+  }
+}
+
+// Capture Antigravity Sidecar token on initial load so SPA route transitions keep authenticating writes.
+const SIDECAR_TOKEN_KEY = "demolab_sidecar_token";
+function resolveSidecarToken(): string {
+  if (typeof window === "undefined") return "";
+  const fromUrl = new URLSearchParams(window.location.search).get("token") || "";
+  if (fromUrl) {
+    try { sessionStorage.setItem(SIDECAR_TOKEN_KEY, fromUrl); } catch { /* ignore */ }
+    return fromUrl;
+  }
+  try { return sessionStorage.getItem(SIDECAR_TOKEN_KEY) || ""; } catch { return ""; }
+}
+const INITIAL_SIDECAR_TOKEN = resolveSidecarToken();
+
+export function inAntigravitySidecar(): boolean {
+  return typeof window !== "undefined" && Boolean(window.sidecar?.agent);
+}
+
+export async function sendToAntigravity(message: string): Promise<boolean> {
+  if (!window.sidecar?.agent) return false;
+  if (window.sidecar.conversationId) {
+    await window.sidecar.agent.sendMessage(message, window.sidecar.conversationId);
+  } else {
+    await window.sidecar.agent.startConversation(message, "Voice Demo Studio");
+  }
+  return true;
+}
 
 export interface Action {
   op: ActionOp;
   selector: string;
+  target?: string;
   value: string;
   seconds: number;
   ff: boolean;
   what: string;
   label: string;
+}
+
+export interface HighlightBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  label: string;
+}
+
+export interface StepFrame {
+  id: string;
+  file: string;
+  phase: "before" | "during" | "result";
+  caption: string;
+  highlight: HighlightBox | null;
+  zoom_to: HighlightBox | null;
+  ff_what: string;
+  ff_elapsed: number;
 }
 
 export interface Segment {
@@ -24,6 +84,8 @@ export interface Segment {
   actions: Action[];
   actions_at: "during" | "after";
   after_narration: string;
+  frames: StepFrame[];
+  citations: string[];
   notes: string;
   approved: boolean;
 }
@@ -40,12 +102,44 @@ export interface Source {
   images: string[];
 }
 
+export interface ResearchItem {
+  id: string;
+  title: string;
+  source_type: "docs" | "blog" | "video" | "slide" | "webpage" | "code" | "context";
+  url_or_path: string;
+  summary: string;
+  verified_claims: string[];
+  added_at: number;
+}
+
+export interface WebAuth {
+  status: "unchecked" | "authenticated" | "login_required" | "not_needed";
+  checked_url: string;
+  account_hint: string;
+  notes: string;
+  updated_at: number;
+}
+
+export interface Readiness {
+  ready: boolean;
+  blockers: string[];
+  warnings: string[];
+  voice_ready: boolean;
+  script_approved: boolean;
+  has_research: boolean;
+  research_count: number;
+  step_count: number;
+  web_auth_status: WebAuth["status"];
+  missing_step_frames: { segment_id: string; title: string }[];
+}
+
 export interface Check { segment_id: string; index: number; ok: boolean; error: string; shot: string }
 export interface Render { file: string; created_at: number; seconds: number; segments: number }
 
 export interface Project {
   id: string;
   name: string;
+  scenario: Scenario;
   base_url: string;
   goal: string;
   brief: string;
@@ -56,6 +150,9 @@ export interface Project {
   voice_id: string;
   voice_style: string;
   sources: Source[];
+  research_summary: string;
+  research: ResearchItem[];
+  web_auth: WebAuth;
   segments: Segment[];
   slides: string[];
   script_approved: boolean;
@@ -66,8 +163,18 @@ export interface Project {
 }
 
 export interface ProjectSummary {
-  id: string; name: string; base_url: string; goal: string; updated_at: number; script_approved: boolean;
-  segments: number; renders: number; sources: number;
+  id: string;
+  name: string;
+  scenario: Scenario;
+  base_url: string;
+  goal: string;
+  updated_at: number;
+  script_approved: boolean;
+  segments: number;
+  renders: number;
+  sources: number;
+  research_count: number;
+  web_auth_status: WebAuth["status"];
 }
 
 export interface ApiKey { id: string; name: string; hint: string; created_at: number }
@@ -105,7 +212,6 @@ export interface Settings {
   fake_gemini: boolean;
 }
 
-/** What a preview speaks with: a project's voice, a saved profile, or any voice with a saved key. */
 export interface PreviewWith { project_id?: string; profile_id?: string; key_id?: string; voice?: string; style?: string; speed?: number }
 
 export interface Job {
@@ -113,12 +219,20 @@ export interface Job {
   message: string; log: string[]; result: Record<string, unknown> | null; error: string;
 }
 
+function authHeaders(extra?: Record<string, string>): Record<string, string> {
+  const token = resolveSidecarToken() || INITIAL_SIDECAR_TOKEN;
+  const h: Record<string, string> = { ...(extra || {}) };
+  if (token) h["X-Sidecar-Token"] = token;
+  return h;
+}
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const init: RequestInit = { method };
-  if (body instanceof FormData) init.body = body;
-  else if (body !== undefined) {
+  const init: RequestInit = { method, headers: authHeaders() };
+  if (body instanceof FormData) {
+    init.body = body;
+  } else if (body !== undefined) {
     init.body = JSON.stringify(body);
-    init.headers = { "Content-Type": "application/json" };
+    init.headers = authHeaders({ "Content-Type": "application/json" });
   }
   const r = await fetch(path, init);
   if (!r.ok) {
@@ -135,9 +249,12 @@ export const api = {
   saveSettings: (s: Partial<Settings>) => req<Settings>("PUT", "/api/settings", s),
   models: () => req<{ name: string; display?: string; methods: string[] }[]>("GET", "/api/models"),
   preview: (text: string, w: PreviewWith = {}) => req<Blob>("POST", "/api/voice/preview", { text, ...w }),
-  /** A test clip plus its measured length and pace. */
   testClip: async (text: string, w: PreviewWith) => {
-    const r = await fetch("/api/voice/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, ...w }) });
+    const r = await fetch("/api/voice/preview", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ text, ...w }),
+    });
     if (!r.ok) { let m = `${r.status}`; try { m = (await r.json()).detail ?? m; } catch { /* not json */ } throw new Error(m); }
     return { blob: await r.blob(), seconds: Number(r.headers.get("X-Seconds")), wpm: Number(r.headers.get("X-Words-Per-Minute")) };
   },
@@ -163,9 +280,11 @@ export const api = {
     req<Project>("PATCH", `/api/projects/${id}/segments/${sid}`, b),
   approve: (id: string, approved: boolean) => req<Project>("POST", `/api/projects/${id}/approve`, { approved }),
 
-  dryrun: (id: string) => req<Job>("POST", `/api/projects/${id}/dryrun`),
-  login: (id: string) => req<Job>("POST", `/api/projects/${id}/login`, {}),
+  setWebAuth: (id: string, status: WebAuth["status"], account_hint = "", notes = "") =>
+    req<Project>("POST", `/api/projects/${id}/web-auth`, { status, account_hint, notes }),
   forgetLogin: (id: string) => req<Project>("DELETE", `/api/projects/${id}/login`),
+  readiness: (id: string) => req<Readiness>("GET", `/api/projects/${id}/readiness`),
+
   render: (id: string, force = false) => req<Job>("POST", `/api/projects/${id}/render`, { force }),
   jobs: (id: string) => req<Job[]>("GET", `/api/projects/${id}/jobs`),
   job: (jid: string) => req<Job>("GET", `/api/jobs/${jid}`),
@@ -173,25 +292,37 @@ export const api = {
 };
 
 export const slideUrl = (pid: string, n: number) => `/api/projects/${pid}/slides/${n}`;
+export const frameUrl = (pid: string, name: string) => `/api/projects/${pid}/frames/${name}`;
 export const checkUrl = (pid: string, name: string) => `/api/projects/${pid}/checks/${name}`;
 export const videoUrl = (pid: string, i: number) => `/api/projects/${pid}/renders/${i}/video`;
 
 export const newAction = (op: ActionOp = "click"): Action =>
-  ({ op, selector: "", value: "", seconds: 0, ff: false, what: "", label: "" });
+  ({ op, selector: "", target: "", value: "", seconds: 0, ff: false, what: "", label: "" });
 
 export const newSegment = (type: SegType): Segment => ({
-  id: "seg_" + Math.random().toString(16).slice(2, 12), type, title: "", kicker: "", sub: "", bullets: [],
-  slide: type === "slide" ? 0 : null, narration: "", actions: [], actions_at: "during", after_narration: "",
-  notes: "", approved: false,
+  id: "seg_" + Math.random().toString(16).slice(2, 12),
+  type,
+  title: "",
+  kicker: "",
+  sub: "",
+  bullets: [],
+  slide: type === "slide" ? 0 : null,
+  narration: "",
+  actions: [],
+  actions_at: "during",
+  after_narration: "",
+  frames: [],
+  citations: [],
+  notes: "",
+  approved: false,
 });
 
-/** ~130 words per minute at 1.0x over a whole video (pauses included), measured on the approved narrator style. */
+/** ~130 words per minute at 1.0x over a whole video (pauses included). */
 export const speakSeconds = (text: string, speed = 1) => (text.trim() ? text.trim().split(/\s+/).length / 2.2 / speed : 0);
 
 const regionNames = typeof Intl !== "undefined" && "DisplayNames" in Intl
   ? new Intl.DisplayNames(undefined, { type: "language" }) : null;
 
-/** "en-us" -> "English (United States)", "es-419" -> "Spanish (Latin America)". */
 export function localeName(code: string): string {
   if (!code) return "Multilingual";
   const [lang, region = ""] = code.split("-");

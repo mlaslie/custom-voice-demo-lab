@@ -1,0 +1,7 @@
+# Voice Demo Lab Plugin Rules
+
+- When the user asks to create, automate, narrate, or render a demo/overview video (from in-Antigravity slides, user-provided slides, or a live website) or manage Gemini TTS narrator voices, read and follow the `voice-demo` skill before taking action.
+- **Plugin-Only Execution**: Run Voice Demo Lab strictly through its MCP tools (`custom-voice-demo-lab_demolab`) and Antigravity Sidecar (`[Voice Demo Studio](sidecar://custom-voice-demo-lab/studio/)`) — never launch standalone user CLIs or external Playwright browser windows.
+- **100% In-Antigravity Browser for Websites**: For any website or hybrid demo (`console.cloud.google.com`, SaaS dashboards, `localhost`), ALWAYS use Antigravity's built-in `browser` subagent. First verify whether the user is signed in; if a sign-in screen is shown, pause and ask the user to log in inside the Antigravity Browser pane before continuing, then record status via `record_web_auth`.
+- **Reality-Grounded Scripts**: Before calling `write_script`, verify product capabilities, recent announcements, technical docs, blogs, and slide claims (using `demo-researcher` or `search_web` + workspace files) and persist verified citations via `save_research`.
+- **API Key Safety**: Never ask for, accept, echo, or pass a `GEMINI_API_KEY` in chat or tool arguments. Direct the user to `[Voice Demo Studio](sidecar://custom-voice-demo-lab/studio/)` (`/setup` or `/settings`), which saves keys directly to the OS keychain.

@@ -1,4 +1,4 @@
-"""Render: narration (TTS, cached) -> title cards -> one recording of all web steps -> MP4."""
+"""Render: narration (TTS, cached) -> pure-Pillow title cards -> slides + AGY browser frames -> MP4."""
 from __future__ import annotations
 
 import pathlib
@@ -10,9 +10,9 @@ from typing import NamedTuple
 
 import httpx
 
-from . import browser, config, gemini, store
+from . import config, gemini, store
 from .cards import card_key, render_cards
-from .compose import Recorded, Still, compose
+from .compose import StepSequence, Still, compose
 from .models import Project, Render
 
 
@@ -28,8 +28,13 @@ def voice_for(p: Project | None = None, profile_id: str = "") -> Voicing:
     """How a project is narrated: its profile (else the active one), then the project's overrides."""
     v = config.resolve(profile_id or (p.profile_id if p else ""))
     speed = (p.speed if p and p.speed else v.profile.speed if v.profile else 1.0)
-    return Voicing((p and p.voice_id) or v.voice, (p and p.voice_style) or v.style, config.load().tts_model,
-                   v.key, config.clamp_speed(speed))
+    return Voicing(
+        (p and p.voice_id) or v.voice,
+        (p and p.voice_style) or v.style,
+        config.load().tts_model,
+        v.key,
+        config.clamp_speed(speed),
+    )
 
 
 def speed_for(p: Project) -> float:
@@ -46,9 +51,14 @@ def _tempo(raw: pathlib.Path, speed: float) -> pathlib.Path:
     out = raw.with_name(f"{raw.stem}@{speed:.2f}.wav")
     if not out.exists():
         tmp = out.with_suffix(".part.wav")
-        subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(raw),
-                        "-filter:a", f"atempo={speed}", "-ar", str(gemini.SR), "-ac", "1", "-c:a", "pcm_s16le",
-                        str(tmp)], check=True)
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(raw),
+                "-filter:a", f"atempo={speed}", "-ar", str(gemini.SR), "-ac", "1", "-c:a", "pcm_s16le",
+                str(tmp),
+            ],
+            check=True,
+        )
         tmp.replace(out)
     return out
 
@@ -62,10 +72,16 @@ def narrate(p: Project, text: str) -> tuple[pathlib.Path, float]:
     return wav, gemini.wav_seconds(wav)
 
 
-def preview(text: str, pid: str | None = None, profile_id: str = "", key_id: str = "", voice: str = "",
-            style: str | None = None, speed: float | None = None) -> pathlib.Path:
-    """Speak text in a project's voice, a profile, or (while choosing) any voice with a saved key. speed
-    tries a pace before saving it (default: the project's or profile's)."""
+def preview(
+    text: str,
+    pid: str | None = None,
+    profile_id: str = "",
+    key_id: str = "",
+    voice: str = "",
+    style: str | None = None,
+    speed: float | None = None,
+) -> pathlib.Path:
+    """Speak text in a project's voice, a profile, or (while choosing) any voice with a saved key."""
     if key_id and voice:
         key, model, speed0 = config.key_value(key_id), config.load().tts_model, 1.0
         style = config.DEFAULT_STYLE if style is None else style
@@ -83,8 +99,7 @@ VERIFY_TEXT = "Voice check. This voice is ready to narrate your demos."
 
 
 def verify_profile(vid: str) -> config.VoiceProfile:
-    """Prove a saved key + voice pair works end to end: the key is in the keychain, Gemini accepts it, the
-    voice is one the key can use, and a short phrase comes back as audio. Records the result."""
+    """Prove a saved key + voice pair works end to end and record the result."""
     s = config.load()
     v = s.profile(vid)
     err = ""
@@ -92,8 +107,10 @@ def verify_profile(vid: str) -> config.VoiceProfile:
         key = config.key_value(v.key_id)
         ids = {x["id"] for x in gemini.list_voices(key)}
         if v.voice not in ids:
-            raise gemini.GeminiError(f"This key's AI Studio project has no voice {v.voice!r}. Use a key from the "
-                                     "project that created the voice, or pick another voice.")
+            raise gemini.GeminiError(
+                f"This key's AI Studio project has no voice {v.voice!r}. Use a key from the "
+                "project that created the voice, or pick another voice."
+            )
         wav = config.HOME / "previews" / f"{gemini.tts_cache_key(VERIFY_TEXT, v.voice, v.style, s.tts_model)}.wav"
         if not wav.exists() and gemini.synth(VERIFY_TEXT, wav, v.voice, v.style, s.tts_model, key=key) < 0.5:
             raise gemini.GeminiError("The voice returned almost no audio.")
@@ -101,8 +118,9 @@ def verify_profile(vid: str) -> config.VoiceProfile:
         err = str(e)[:400] or e.__class__.__name__
 
     def record(q: config.Settings):
-        p = q.profile(vid)
-        p.verified_at, p.verify_error = (0, err) if err else (time.time(), "")
+        prof = q.profile(vid)
+        prof.verified_at, prof.verify_error = (0, err) if err else (time.time(), "")
+
     return config.mutate(record).profile(vid)
 
 
@@ -117,57 +135,68 @@ def render(job, pid: str, force: bool = False, keep_build: bool = False) -> dict
     if not p.script_approved and not force:
         raise ValueError("Approve the script before rendering (or pass force).")
     steps = [s for s in p.segments if s.type == "step"]
-    if steps and not p.base_url:
-        raise ValueError("The script has web steps but the project has no app URL.")
+    if steps:
+        if not p.base_url:
+            raise ValueError("The script has website steps (`step`) but the project has no `base_url`.")
+        missing = [s.title or s.id for s in steps if not s.frames]
+        if missing:
+            raise ValueError(
+                "Capture AGY browser frames (`record_step_frames`) before rendering for step(s): "
+                + ", ".join(missing)
+            )
     if not shutil.which("ffmpeg"):
-        raise RuntimeError("ffmpeg is not installed (brew install ffmpeg).")
+        raise RuntimeError("ffmpeg is not installed (`brew install ffmpeg`).")
 
     st = config.load()
     out_root = pathlib.Path(st.output_dir).expanduser()
     vol = out_root.parts[:3] if out_root.parts[1:2] == ("Volumes",) else None
     if vol and not pathlib.Path(*vol).exists():   # don't silently write to the internal disk instead
         raise RuntimeError(f"The render folder's drive {pathlib.Path(*vol)} is not mounted.")
-    build =out_root / ".build" / p.id
+    build = out_root / ".build" / p.id
     shutil.rmtree(build, ignore_errors=True)
     build.mkdir(parents=True)
 
-    # 1. narration
+    # 1. narration (Gemini TTS, cached by text+voice+style+model)
     texts = [(s.id, s.narration) for s in p.segments if s.narration.strip()] + \
             [(f"{s.id}:after", s.after_narration) for s in steps if s.after_narration.strip()]
     audio: dict[str, tuple[pathlib.Path, float]] = {}
     for n, (key, text) in enumerate(texts):
-        job.say(f"Narrating {n + 1}/{len(texts)}", 0.25 * n / max(1, len(texts)))
+        job.say(f"Narrating {n + 1}/{len(texts)}", 0.45 * n / max(1, len(texts)))
         audio[key] = narrate(p, text.strip())
 
-    # 2. title cards
-    job.say("Rendering title cards", 0.27)
+    # 2. title cards (pure Pillow, 2x supersampled)
+    job.say("Rendering title cards", 0.50)
     cards = [s.model_dump(include={"title", "kicker", "sub", "bullets"}) for s in p.segments if s.type == "card"]
     card_png = render_cards(cards, config.HOME / "cards") if cards else {}
 
-    # 3. web steps
-    events, frames = [], []
-    if steps:
-        events, frames = browser.record_steps(job, p, steps, audio, build)
-
-    # 4. compose
-    job.say("Composing video", 0.75)
-    pieces = []
-    slides = store.sub(p.id, "slides")
+    # 3. compose 1080p MP4 from cards, slides, and captured AGY browser frames
+    job.say("Composing 1080p video", 0.65)
+    pieces: list[Still | StepSequence] = []
+    slides_dir = store.sub(p.id, "slides")
+    step_frames_dir = store.sub(p.id, "frames")
     for s in p.segments:
         clip = [audio[s.id]] if s.id in audio else []
         if s.type == "card":
             pieces.append(Still(card_png[card_key(s.model_dump())], clip))
         elif s.type == "slide" and s.slide is not None and s.slide < len(p.slides):
-            pieces.append(Still(slides / p.slides[s.slide], clip))
+            pieces.append(Still(slides_dir / p.slides[s.slide], clip))
         elif s.type == "step":
-            pieces.append(Recorded(s.id))
+            pieces.append(
+                StepSequence(
+                    seg_id=s.id,
+                    frames=s.frames,
+                    frames_dir=step_frames_dir,
+                    narration_clip=audio.get(s.id),
+                    after_clip=audio.get(f"{s.id}:after"),
+                )
+            )
     name = f"{_slug(p.name)}-{time.strftime('%Y%m%d-%H%M%S')}.mp4"
     out = out_root / name
-    secs = compose(pieces, events, frames, build / "frames", build / "work", out)
+    secs = compose(pieces, [], [], build / "frames", build / "work", out)
     if not keep_build:
         shutil.rmtree(build, ignore_errors=True)
 
     r = Render(file=str(out), created_at=time.time(), seconds=secs, segments=len(p.segments))
     store.mutate(pid, lambda q: q.renders.insert(0, r))
-    job.say(f"Rendered {secs / 60:.1f} min -> {out}")
+    job.say(f"Rendered {secs / 60:.1f} min -> {out}", 1.0)
     return {"file": str(out), "seconds": secs}
