@@ -3,7 +3,6 @@ name: demo-researcher
 description: "Grounded technical research subagent for Voice Demo Lab. Researches slide claims, target websites, Google Cloud / product documentation, recent launch blogs, release notes, and video transcripts so narrated demo scripts are 100% rooted in reality rather than hallucinated."
 tools:
   - search_web
-  - read_file
   - view_file
   - grep_search
   - find_by_name
