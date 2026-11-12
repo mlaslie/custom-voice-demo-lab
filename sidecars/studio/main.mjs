@@ -49,6 +49,60 @@ const UI_TOKEN = process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN || '';
 
 let cachedBackend = null; // { hostname, port }
 let inflightEnsure = null; // Promise<{ hostname, port }>
+let cachedLsGDrive = { at: 0, value: null }; // { installed: boolean, disabled: boolean } | null
+
+function queryLsGDrivePlugin() {
+  const now = Date.now();
+  if (cachedLsGDrive.value && now - cachedLsGDrive.at < 2500) {
+    return Promise.resolve(cachedLsGDrive.value);
+  }
+  const lsAddr = process.env.ANTIGRAVITY_LS_ADDRESS || '';
+  const csrf = process.env.ANTIGRAVITY_CSRF_TOKEN || '';
+  if (!lsAddr || !csrf) return Promise.resolve(null);
+
+  const [hostname, portStr] = lsAddr.split(':');
+  const port = parseInt(portStr || '0', 10);
+  if (!hostname || !port) return Promise.resolve(null);
+
+  return new Promise((resolve) => {
+    const body = Buffer.from('{}', 'utf-8');
+    const req = httpRequest(
+      {
+        hostname,
+        port,
+        path: '/exa.language_server_pb.LanguageServerService/GetAllPlugins',
+        method: 'POST',
+        timeout: 900,
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': body.length,
+          'x-codeium-csrf-token': csrf,
+        },
+      },
+      (res) => {
+        let raw = '';
+        res.on('data', (c) => { raw += c; });
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(raw || '{}');
+            const plugins = Array.isArray(parsed.plugins) ? parsed.plugins : [];
+            const hit = plugins.find(
+              (p) => p?.name === 'gdrive' || p?.installedFrom?.id === 'antigravity-plugins-official/plugin/gdrive'
+            );
+            const val = hit ? { installed: true, disabled: Boolean(hit.disabled) } : { installed: false, disabled: false };
+            cachedLsGDrive = { at: Date.now(), value: val };
+            resolve(val);
+          } catch {
+            resolve(null);
+          }
+        });
+      }
+    );
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.on('error', () => resolve(null));
+    req.end(body);
+  });
+}
 
 function probeHealth(port) {
   return new Promise((resolve) => {
@@ -230,6 +284,13 @@ async function proxyToBackend(req, res, url, retried = false) {
   const cleanSearch = new URLSearchParams(url.searchParams);
   cleanSearch.delete('token');
   cleanSearch.delete('conversationId');
+  if (req.method === 'GET' && url.pathname === '/api/gdrive/status') {
+    const lsState = await queryLsGDrivePlugin();
+    if (lsState) {
+      cleanSearch.set('ls_installed', String(lsState.installed));
+      cleanSearch.set('ls_disabled', String(lsState.disabled));
+    }
+  }
   const qs = cleanSearch.toString();
   const forwardPath = url.pathname + (qs ? `?${qs}` : '');
 

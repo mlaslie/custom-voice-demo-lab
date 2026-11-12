@@ -13,11 +13,12 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import agy_browser, config, gemini, jobs, pipeline, script, sources, store
+from . import agy_browser, config, gdrive_store, gemini, jobs, pipeline, script, sources, store
 from .models import Project, ResearchItem, Scenario, Segment
 
 STATIC = pathlib.Path(__file__).parent / "static"
 ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
+_RECENT_DOWNLOADS: dict[tuple[str, int], pathlib.Path] = {}
 
 app = FastAPI(title="Voice Demo Lab", version="0.4.0")
 
@@ -532,6 +533,8 @@ def render_video(pid: str, i: int, download: bool = False):
 
 class DownloadIn(BaseModel):
     dest_dir: str = ""
+    dest_file: str = ""
+    choose_location: bool = True
 
 
 @app.post("/api/projects/{pid}/renders/{i}/download")
@@ -539,19 +542,36 @@ def download_render_local(pid: str, i: int, b: DownloadIn = Body(default=Downloa
     src = pathlib.Path(store.get(pid).renders[i].file)
     if not src.exists():
         raise KeyError(str(src))
-    downloads_dir = pathlib.Path(b.dest_dir).expanduser() if b.dest_dir.strip() else (pathlib.Path.home() / "Downloads")
-    downloads_dir.mkdir(parents=True, exist_ok=True)
-    dest = downloads_dir / src.name
-    if dest.exists() and dest.resolve() != src.resolve():
-        # Deduplicate only if content size differs; overwrite identical-name previous download cleanly if desired
-        if dest.stat().st_size != src.stat().st_size:
+
+    if b.dest_file.strip():
+        dest = pathlib.Path(b.dest_file.strip()).expanduser()
+        if dest.suffix.lower() != ".mp4":
+            dest = dest.with_suffix(".mp4")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+    elif b.dest_dir.strip():
+        downloads_dir = pathlib.Path(b.dest_dir).expanduser()
+        downloads_dir.mkdir(parents=True, exist_ok=True)
+        dest = downloads_dir / src.name
+        if dest.exists() and dest.resolve() != src.resolve() and dest.stat().st_size != src.stat().st_size:
             n = 2
             while (downloads_dir / f"{src.stem}-{n}{src.suffix}").exists():
                 n += 1
             dest = downloads_dir / f"{src.stem}-{n}{src.suffix}"
+    elif b.choose_location:
+        chosen = gdrive_store.choose_save_path(src.name)
+        if chosen is None:
+            return {"canceled": True, "saved_to": "", "filename": ""}
+        dest = chosen
+        dest.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        downloads_dir = pathlib.Path.home() / "Downloads"
+        downloads_dir.mkdir(parents=True, exist_ok=True)
+        dest = downloads_dir / src.name
+
     if dest.resolve() != src.resolve():
         shutil.copy2(src, dest)
-    return {"saved_to": str(dest), "filename": dest.name}
+    _RECENT_DOWNLOADS[(pid, i)] = dest
+    return {"canceled": False, "saved_to": str(dest), "filename": dest.name}
 
 
 class RenderPatch(BaseModel):
@@ -578,11 +598,41 @@ def patch_render(pid: str, i: int, b: RenderPatch):
 @app.post("/api/projects/{pid}/renders/{i}/reveal")
 def reveal(pid: str, i: int, downloaded: bool = False):
     render_file = pathlib.Path(store.get(pid).renders[i].file)
-    dl_candidate = pathlib.Path.home() / "Downloads" / render_file.name
+    recent_dl = _RECENT_DOWNLOADS.get((pid, i))
+    dl_candidate = recent_dl if (recent_dl and recent_dl.exists()) else (pathlib.Path.home() / "Downloads" / render_file.name)
     f = str(dl_candidate if downloaded and dl_candidate.exists() else render_file)
     if sys.platform == "darwin":
         subprocess.Popen(["open", "-R", f])
     return {"file": f}
+
+
+# ---- Google Drive plugin status & graphical folder tree -----------------------------------------
+
+@app.get("/api/gdrive/status")
+def gdrive_status(ls_installed: bool | None = None, ls_disabled: bool | None = None):
+    return gdrive_store.get_status(ls_installed=ls_installed, ls_disabled=ls_disabled)
+
+
+class GDriveStateIn(BaseModel):
+    connected: bool
+    account_email: str = ""
+    folders: list[dict] | None = None
+    root_id: str = ""
+    merge_folders: bool = False
+    parent_override: str = ""
+
+
+@app.post("/api/gdrive/state")
+def set_gdrive_state(b: GDriveStateIn):
+    gdrive_store.save_state(
+        connected=b.connected,
+        account_email=b.account_email,
+        folders=b.folders,
+        root_id=b.root_id,
+        merge_folders=b.merge_folders,
+        parent_override=b.parent_override,
+    )
+    return gdrive_store.get_status()
 
 
 # ---- Studio SPA ---------------------------------------------------------------------------------

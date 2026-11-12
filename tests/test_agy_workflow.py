@@ -244,22 +244,67 @@ def test_end_to_end_research_agy_browser_onboarding_and_hybrid_mp4_render(tmp_pa
     dl_dir = tmp_path / "downloads"
     r_dl = c.post(f"/api/projects/{pid}/renders/0/download", json={"dest_dir": str(dl_dir)})
     assert r_dl.status_code == 200
+    assert r_dl.json()["canceled"] is False
     saved_dl = pathlib.Path(r_dl.json()["saved_to"])
     assert saved_dl.is_file() and saved_dl.stat().st_size == mp4.stat().st_size
+
+    # Native Save-As dialog flow: user cancel vs user choosing custom folder + filename
+    from demolab import gdrive_store
+
+    monkeypatch.setattr(gdrive_store, "choose_save_path", lambda _name, _dir=None: None)
+    r_cancel = c.post(f"/api/projects/{pid}/renders/0/download", json={"choose_location": True})
+    assert r_cancel.status_code == 200 and r_cancel.json()["canceled"] is True
+
+    chosen_target = tmp_path / "CustomChosenDir" / "custom-healthcare-demo.mp4"
+    monkeypatch.setattr(gdrive_store, "choose_save_path", lambda _name, _dir=None: chosen_target)
+    r_chosen = c.post(f"/api/projects/{pid}/renders/0/download", json={"choose_location": True})
+    assert r_chosen.status_code == 200 and r_chosen.json()["canceled"] is False
+    assert pathlib.Path(r_chosen.json()["saved_to"]) == chosen_target
+    assert chosen_target.is_file() and chosen_target.stat().st_size == mp4.stat().st_size
+
+    # Google Drive plugin status & graphical folder tree sync
+    st_uninstalled = c.get("/api/gdrive/status?ls_installed=false&ls_disabled=false").json()
+    assert st_uninstalled["status"] == "not_installed" and st_uninstalled["connected"] is False
+
+    st_disabled = c.get("/api/gdrive/status?ls_installed=true&ls_disabled=true").json()
+    assert st_disabled["status"] == "disabled" and st_disabled["connected"] is False
+
+    st_needs_auth = c.get("/api/gdrive/status?ls_installed=true&ls_disabled=false").json()
+    assert st_needs_auth["status"] == "needs_auth" and st_needs_auth["connected"] is False
+
+    st_synced = c.post(
+        "/api/gdrive/state",
+        json={
+            "connected": True,
+            "account_email": "demo@example.com",
+            "folders": [
+                {"id": "fld_marketing", "name": "Marketing", "parents": ["0AP_opaque_my_drive_root"]},
+                {"id": "fld_q4", "name": "Q4 Launches", "parents": ["fld_marketing"]},
+                {"id": "fld_health", "name": "Healthcare Demos", "parents": ["fld_q4"], "shared": True},
+            ],
+        },
+    ).json()
+    assert st_synced["connected"] is True
+    assert st_synced["account_email"] == "demo@example.com"
+    folders_by_id = {f["id"]: f for f in st_synced["folders"]}
+    assert folders_by_id["fld_marketing"]["parent_id"] == "root"
+    assert folders_by_id["fld_q4"]["parent_id"] == "fld_marketing"
+    assert folders_by_id["fld_health"]["parent_id"] == "fld_q4"
+    assert folders_by_id["fld_health"]["shared"] is True
 
     r_drive = c.patch(
         f"/api/projects/{pid}/renders/0",
         json={
             "drive_file_id": "1AbCdEfGhIjKlMnOpQr",
             "drive_url": "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQr/view",
-            "drive_folder": "Demo Videos",
+            "drive_folder": "My Drive / Marketing / Q4 Launches",
         },
     )
     assert r_drive.status_code == 200
     r0 = r_drive.json()["renders"][0]
     assert r0["drive_file_id"] == "1AbCdEfGhIjKlMnOpQr"
     assert r0["drive_url"] == "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQr/view"
-    assert r0["drive_folder"] == "Demo Videos"
+    assert r0["drive_folder"] == "My Drive / Marketing / Q4 Launches"
     assert r0["drive_uploaded_at"] > 0
 
 

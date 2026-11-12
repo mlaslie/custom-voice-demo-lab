@@ -155,6 +155,23 @@ export interface Render {
   drive_uploaded_at?: number;
 }
 
+export interface GDriveFolder {
+  id: string;
+  name: string;
+  parent_id: string;
+  shared?: boolean;
+}
+
+export interface GDriveStatus {
+  status: "not_installed" | "disabled" | "needs_auth" | "connected";
+  installed: boolean;
+  disabled: boolean;
+  connected: boolean;
+  account_email: string;
+  folders: GDriveFolder[];
+  updated_at: number;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -309,10 +326,19 @@ export const api = {
   job: (jid: string) => req<Job>("GET", `/api/jobs/${jid}`),
   reveal: (id: string, i: number, downloaded = false) =>
     req<{ file: string }>("POST", `/api/projects/${id}/renders/${i}/reveal${downloaded ? "?downloaded=true" : ""}`),
-  downloadLocal: (id: string, i: number, dest_dir = "") =>
-    req<{ saved_to: string; filename: string }>("POST", `/api/projects/${id}/renders/${i}/download`, { dest_dir }),
+  downloadLocal: (
+    id: string,
+    i: number,
+    opts: { dest_dir?: string; dest_file?: string; choose_location?: boolean } = { choose_location: true },
+  ) =>
+    req<{ canceled: boolean; saved_to: string; filename: string }>(
+      "POST",
+      `/api/projects/${id}/renders/${i}/download`,
+      opts,
+    ),
   patchRender: (id: string, i: number, b: { drive_file_id?: string; drive_url?: string; drive_folder?: string }) =>
     req<Project>("PATCH", `/api/projects/${id}/renders/${i}`, b),
+  gdriveStatus: () => req<GDriveStatus>("GET", "/api/gdrive/status"),
 };
 
 export const slideUrl = (pid: string, n: number) => withTokenQuery(`/api/projects/${pid}/slides/${n}`);

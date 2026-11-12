@@ -552,6 +552,36 @@ def get_job(job_id: str) -> dict:
 
 
 @mcp.tool()
+def sync_gdrive_state(
+    connected: bool,
+    account_email: str = "",
+    folders: list[dict] | None = None,
+    root_id: str = "",
+    merge_folders: bool = False,
+    parent_override: str = "",
+) -> dict:
+    """Sync Google Drive (`gdrive`) plugin connection status and folder hierarchy into Voice Demo Studio so
+    the Studio sidecar unlocks 'Push to Google Drive' and populates its graphical folder picker modal.
+
+    Typical workflow in Antigravity once `gdrive` is signed in:
+      1. Check `list_plugin_accounts` for the signed-in Google account email.
+      2. Run `gdrive readonly search --type folder --max 400 --json` via `run_command`.
+      3. Pass the parsed JSON list of `{id, name, parents}` dicts to `sync_gdrive_state(connected=True, account_email=..., folders=...)`."""
+    return client.call(
+        "POST",
+        "/api/gdrive/state",
+        json={
+            "connected": connected,
+            "account_email": account_email,
+            "folders": folders,
+            "root_id": root_id,
+            "merge_folders": merge_folders,
+            "parent_override": parent_override,
+        },
+    )
+
+
+@mcp.tool()
 def record_render_drive_upload(
     project_id: str,
     drive_url: str,

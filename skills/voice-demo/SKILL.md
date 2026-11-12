@@ -148,10 +148,17 @@ For projects with `step` segments (either before or right after script approval,
 
 ---
 
-### Step 9: Push Rendered Video to Google Drive (`gdrive` Plugin + `record_render_drive_upload`)
-When the user clicks **Push to Google Drive** in **Voice Demo Studio** (or asks in chat to upload a rendered demo MP4 to Google Drive):
-1. Check whether the official **Google Drive** plugin (`antigravity-plugins-official/plugin/gdrive`) is installed and connected (`list_plugin_accounts`).
-   - If **Google Drive** is not installed yet, call `search_marketplace(queries=["google drive", "gdrive"])` and emit `<plugin-card catalog-id="antigravity-plugins-official/plugin/gdrive"></plugin-card>` on its own line so the user can add and connect it in one click, then stop and wait.
-   - If **Google Drive** is installed and signed in, read its `gdrive` skill and upload the rendered `.mp4` (`renders[i].file`) into the requested Drive folder (creating/locating the folder first if specified, or uploading to root My Drive).
-2. Capture the uploaded file's `fileId` and `webViewLink` (`https://drive.google.com/file/d/<fileId>/view`).
-3. Persist the Google Drive link back onto the project render via `record_render_drive_upload(project_id, drive_url=..., drive_file_id=..., drive_folder=..., render_index=i)` (or `PATCH /api/projects/{project_id}/renders/{i}` if running before MCP reload) so **Voice Demo Studio** immediately displays **Open in Google Drive** on that render card.
+### Step 9: Google Drive Setup, Folder Picker Sync & MP4 Upload (`gdrive` + `sync_gdrive_state` + `record_render_drive_upload`)
+**Voice Demo Studio** keeps **Push to Google Drive** greyed out whenever `gdrive` is not installed, disabled, or not signed in, showing an adjacent action button (**Install Google Drive** / **Enable Google Drive** / **Sign in to Google Drive**), and opens a **graphical Google Drive Folder Picker** once connected:
+
+1. **Handling Install / Enable / Sign-In or Folder Refresh requests**:
+   - Check `list_plugin_accounts` (and installed plugins if needed):
+     - **Not installed**: Call `search_marketplace(queries=["google drive", "gdrive"])` and emit `<plugin-card catalog-id="antigravity-plugins-official/plugin/gdrive"></plugin-card>` on its own line so the user can install and sign in with one click, then stop and wait.
+     - **Disabled**: Give the user `[gdrive](customization://gdrive)` so they can toggle it on in Customizations.
+     - **Installed, not signed in (`not connected`)**: Run `gdrive --help` (which outputs the sign-in prompt) and emit `<plugin-card catalog-id="gdrive"></plugin-card>` on its own line so the user can sign in to Google Drive, then stop and wait.
+     - **Installed and signed in**: Read the `gdrive` skill, fetch the folder tree via `gdrive readonly search --type folder --max 400 --json`, and call `sync_gdrive_state(connected=True, account_email="<email>", folders=<parsed_json_list>)` (or `POST /api/gdrive/state` if running before MCP reload). This immediately unlocks **Push to Google Drive** in Studio and populates its graphical folder browser!
+2. **Uploading to the Selected Folder (`Push to Google Drive` -> `Upload MP4 Here`)**:
+   - If the user requested a `new_subfolder` inside the selected parent folder, create it first via `gdrive mutate mkdir "<new_subfolder>" --parent <folder_id> --json` (omit `--parent` if `folder_id == "root"`).
+   - Upload `renders[i].file` via `gdrive mutate upload "<mp4_path>" --parent <target_folder_id> --json` (omit `--parent` when uploading directly to My Drive `root`).
+   - Fetch the shareable URL via `gdrive readonly url <fileId>` (or `https://drive.google.com/file/d/<fileId>/view`).
+   - Persist the Drive link back onto the project render via `record_render_drive_upload(project_id, drive_url=..., drive_file_id=..., drive_folder=..., render_index=i)` so **Voice Demo Studio** immediately displays **Open in Google Drive** on that render card.
