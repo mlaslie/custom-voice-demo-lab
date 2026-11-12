@@ -182,6 +182,7 @@ export default function RenderTab({ project: p, refresh, goto }: TabProps) {
           index={i}
           gdrive={gdrive}
           onRefreshGdrive={refreshGdrive}
+          onRefreshProject={refresh}
         />
       ))}
     </div>
@@ -195,6 +196,7 @@ function RenderCard({
   index: i,
   gdrive,
   onRefreshGdrive,
+  onRefreshProject,
 }: {
   projectId: string;
   projectName: string;
@@ -202,6 +204,7 @@ function RenderCard({
   index: number;
   gdrive: GDriveStatus | null;
   onRefreshGdrive: () => void;
+  onRefreshProject: () => void;
 }) {
   const isSidecar = inAntigravitySidecar();
   const [dlBusy, setDlBusy] = useState(false);
@@ -227,6 +230,12 @@ function RenderCard({
   useEffect(() => {
     setRefreshingFolders(false);
   }, [gdrive?.updated_at]);
+
+  useEffect(() => {
+    if (!drivePending) return;
+    const t = window.setInterval(onRefreshProject, 2500);
+    return () => window.clearInterval(t);
+  }, [drivePending, onRefreshProject]);
 
   useEffect(() => {
     if (r.drive_url) {
