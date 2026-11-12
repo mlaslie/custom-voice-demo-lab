@@ -142,6 +142,10 @@ class Render(BaseModel):
     created_at: float
     seconds: float
     segments: int
+    drive_file_id: str = ""
+    drive_url: str = ""
+    drive_folder: str = ""
+    drive_uploaded_at: float = 0
 
 
 class Project(BaseModel):

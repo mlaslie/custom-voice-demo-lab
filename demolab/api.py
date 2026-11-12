@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import pathlib
+import shutil
 import subprocess
 import sys
+import time
 from typing import Literal
 
 from fastapi import Body, FastAPI, HTTPException, Request
@@ -519,16 +521,65 @@ def job(jid: str):
 
 
 @app.get("/api/projects/{pid}/renders/{i}/video")
-def render_video(pid: str, i: int):
+def render_video(pid: str, i: int, download: bool = False):
     f = pathlib.Path(store.get(pid).renders[i].file)
     if not f.exists():
         raise KeyError(str(f))
+    if download:
+        return FileResponse(f, media_type="video/mp4", filename=f.name)
     return FileResponse(f, media_type="video/mp4")
 
 
+class DownloadIn(BaseModel):
+    dest_dir: str = ""
+
+
+@app.post("/api/projects/{pid}/renders/{i}/download")
+def download_render_local(pid: str, i: int, b: DownloadIn = Body(default=DownloadIn())):
+    src = pathlib.Path(store.get(pid).renders[i].file)
+    if not src.exists():
+        raise KeyError(str(src))
+    downloads_dir = pathlib.Path(b.dest_dir).expanduser() if b.dest_dir.strip() else (pathlib.Path.home() / "Downloads")
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+    dest = downloads_dir / src.name
+    if dest.exists() and dest.resolve() != src.resolve():
+        # Deduplicate only if content size differs; overwrite identical-name previous download cleanly if desired
+        if dest.stat().st_size != src.stat().st_size:
+            n = 2
+            while (downloads_dir / f"{src.stem}-{n}{src.suffix}").exists():
+                n += 1
+            dest = downloads_dir / f"{src.stem}-{n}{src.suffix}"
+    if dest.resolve() != src.resolve():
+        shutil.copy2(src, dest)
+    return {"saved_to": str(dest), "filename": dest.name}
+
+
+class RenderPatch(BaseModel):
+    drive_file_id: str | None = None
+    drive_url: str | None = None
+    drive_folder: str | None = None
+
+
+@app.patch("/api/projects/{pid}/renders/{i}")
+def patch_render(pid: str, i: int, b: RenderPatch):
+    def apply(p: Project):
+        if i < 0 or i >= len(p.renders):
+            raise KeyError(f"render {i}")
+        r = p.renders[i]
+        changes = b.model_dump(exclude_none=True)
+        for k, v in changes.items():
+            setattr(r, k, v)
+        if changes.get("drive_url") or changes.get("drive_file_id"):
+            r.drive_uploaded_at = time.time()
+
+    return store.mutate(pid, apply)
+
+
 @app.post("/api/projects/{pid}/renders/{i}/reveal")
-def reveal(pid: str, i: int):
-    f = store.get(pid).renders[i].file
+def reveal(pid: str, i: int, downloaded: bool = False):
+    render_file = pathlib.Path(store.get(pid).renders[i].file)
+    dl_candidate = pathlib.Path.home() / "Downloads" / render_file.name
+    f = str(dl_candidate if downloaded and dl_candidate.exists() else render_file)
     if sys.platform == "darwin":
         subprocess.Popen(["open", "-R", f])
     return {"file": f}

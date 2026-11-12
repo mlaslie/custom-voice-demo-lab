@@ -144,7 +144,16 @@ export interface Readiness {
 }
 
 export interface Check { segment_id: string; index: number; ok: boolean; error: string; shot: string }
-export interface Render { file: string; created_at: number; seconds: number; segments: number }
+export interface Render {
+  file: string;
+  created_at: number;
+  seconds: number;
+  segments: number;
+  drive_file_id?: string;
+  drive_url?: string;
+  drive_folder?: string;
+  drive_uploaded_at?: number;
+}
 
 export interface Project {
   id: string;
@@ -298,13 +307,19 @@ export const api = {
   render: (id: string, force = false) => req<Job>("POST", `/api/projects/${id}/render`, { force }),
   jobs: (id: string) => req<Job[]>("GET", `/api/projects/${id}/jobs`),
   job: (jid: string) => req<Job>("GET", `/api/jobs/${jid}`),
-  reveal: (id: string, i: number) => req("POST", `/api/projects/${id}/renders/${i}/reveal`),
+  reveal: (id: string, i: number, downloaded = false) =>
+    req<{ file: string }>("POST", `/api/projects/${id}/renders/${i}/reveal${downloaded ? "?downloaded=true" : ""}`),
+  downloadLocal: (id: string, i: number, dest_dir = "") =>
+    req<{ saved_to: string; filename: string }>("POST", `/api/projects/${id}/renders/${i}/download`, { dest_dir }),
+  patchRender: (id: string, i: number, b: { drive_file_id?: string; drive_url?: string; drive_folder?: string }) =>
+    req<Project>("PATCH", `/api/projects/${id}/renders/${i}`, b),
 };
 
 export const slideUrl = (pid: string, n: number) => withTokenQuery(`/api/projects/${pid}/slides/${n}`);
 export const frameUrl = (pid: string, name: string) => withTokenQuery(`/api/projects/${pid}/frames/${encodeURIComponent(name)}`);
 export const checkUrl = (pid: string, name: string) => withTokenQuery(`/api/projects/${pid}/checks/${encodeURIComponent(name)}`);
 export const videoUrl = (pid: string, i: number) => withTokenQuery(`/api/projects/${pid}/renders/${i}/video`);
+export const videoDownloadUrl = (pid: string, i: number) => withTokenQuery(`/api/projects/${pid}/renders/${i}/video?download=1`);
 
 export const newAction = (op: ActionOp = "click"): Action =>
   ({ op, selector: "", target: "", value: "", seconds: 0, ff: false, what: "", label: "" });

@@ -236,6 +236,32 @@ def test_end_to_end_research_agy_browser_onboarding_and_hybrid_mp4_render(tmp_pa
     assert mp4.is_file() and mp4.stat().st_size > 10_000
     assert res["seconds"] > 6.0
 
+    # 8. Direct download (?download=1 attachment header + local Downloads copy) & Google Drive link persistence
+    r_att = c.get(f"/api/projects/{pid}/renders/0/video?download=1")
+    assert r_att.status_code == 200
+    assert "attachment" in r_att.headers.get("content-disposition", "")
+
+    dl_dir = tmp_path / "downloads"
+    r_dl = c.post(f"/api/projects/{pid}/renders/0/download", json={"dest_dir": str(dl_dir)})
+    assert r_dl.status_code == 200
+    saved_dl = pathlib.Path(r_dl.json()["saved_to"])
+    assert saved_dl.is_file() and saved_dl.stat().st_size == mp4.stat().st_size
+
+    r_drive = c.patch(
+        f"/api/projects/{pid}/renders/0",
+        json={
+            "drive_file_id": "1AbCdEfGhIjKlMnOpQr",
+            "drive_url": "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQr/view",
+            "drive_folder": "Demo Videos",
+        },
+    )
+    assert r_drive.status_code == 200
+    r0 = r_drive.json()["renders"][0]
+    assert r0["drive_file_id"] == "1AbCdEfGhIjKlMnOpQr"
+    assert r0["drive_url"] == "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQr/view"
+    assert r0["drive_folder"] == "Demo Videos"
+    assert r0["drive_uploaded_at"] > 0
+
 
 @pytest.mark.skipif(
     not pathlib.Path.home().joinpath(".gemini/antigravity/lib/node_modules/sidecar_sdk/register_loader.js").exists(),

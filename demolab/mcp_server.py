@@ -104,6 +104,17 @@ def _summary(p: dict, decks: bool = False) -> dict:
             for s in p["segments"]
         ],
         "renders": [r["file"] for r in p["renders"]],
+        "renders_detail": [
+            {
+                "index": idx,
+                "file": r["file"],
+                "seconds": r["seconds"],
+                **({"drive_url": r["drive_url"]} if r.get("drive_url") else {}),
+                **({"drive_file_id": r["drive_file_id"]} if r.get("drive_file_id") else {}),
+                **({"drive_folder": r["drive_folder"]} if r.get("drive_folder") else {}),
+            }
+            for idx, r in enumerate(p["renders"])
+        ],
         "studio_url": f"{client.BASE}/projects/{p['id']}",
         "sidecar_pill": SIDECAR_PILL,
     }
@@ -538,6 +549,34 @@ def render(project_id: str, wait: bool = False, force: bool = False) -> dict:
 def get_job(job_id: str) -> dict:
     """Get status, progress message, result, and recent log lines of a background render job."""
     return _job(client.call("GET", f"/api/jobs/{job_id}"))
+
+
+@mcp.tool()
+def record_render_drive_upload(
+    project_id: str,
+    drive_url: str,
+    drive_file_id: str = "",
+    drive_folder: str = "",
+    render_index: int = -1,
+) -> dict:
+    """Record the Google Drive shareable URL and file ID on a rendered MP4 after uploading it via Antigravity's
+    official Google Drive (`gdrive`) plugin, so Voice Demo Studio displays an 'Open in Google Drive' button.
+    `render_index`: 0-based index into `project.renders` (defaults to `-1` for the most recent render)."""
+    p = client.call("GET", f"/api/projects/{project_id}")
+    renders = p.get("renders", [])
+    if not renders:
+        raise ValueError(f"Project {project_id} has no rendered videos yet.")
+    idx = len(renders) - 1 if render_index < 0 else render_index
+    updated = client.call(
+        "PATCH",
+        f"/api/projects/{project_id}/renders/{idx}",
+        json={
+            "drive_url": drive_url,
+            "drive_file_id": drive_file_id,
+            "drive_folder": drive_folder,
+        },
+    )
+    return _summary(updated)
 
 
 def main() -> None:

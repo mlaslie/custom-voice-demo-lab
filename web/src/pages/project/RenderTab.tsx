@@ -1,10 +1,19 @@
-import { AlertTriangle, CheckCircle2, Circle, Clapperboard, FolderOpen } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Circle, Clapperboard, CloudUpload, Download, ExternalLink, FolderOpen } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, videoUrl, type Readiness, type Settings } from "../../api";
+import { api, inAntigravitySidecar, sendToAntigravity, videoDownloadUrl, videoUrl, type Readiness, type Render, type Settings } from "../../api";
 import { JobStatus, useJob } from "../../components/hooks";
-import { Alert, Button } from "../../components/ui";
+import { Alert, Badge, Button } from "../../components/ui";
 import type { TabProps } from "../Project";
+
+const DRIVE_FOLDER_KEY = "demolab_drive_folder";
+
+function loadSavedDriveFolder(): string {
+  try { return localStorage.getItem(DRIVE_FOLDER_KEY) || ""; } catch { return ""; }
+}
+function saveDriveFolder(v: string) {
+  try { localStorage.setItem(DRIVE_FOLDER_KEY, v); } catch { /* ignore */ }
+}
 
 export default function RenderTab({ project: p, refresh, goto }: TabProps) {
   const [s, setS] = useState<Settings | null>(null);
@@ -107,16 +116,190 @@ export default function RenderTab({ project: p, refresh, goto }: TabProps) {
       <JobStatus job={job.job} />
 
       {p.renders.map((r, i) => (
-        <div key={r.file} className="card overflow-hidden">
-          <video src={videoUrl(p.id, i)} controls preload="metadata" className="aspect-video w-full bg-black" />
-          <div className="flex flex-wrap items-center gap-3 px-4 py-3 text-xs sm:text-sm">
-            <span className="font-medium">{new Date(r.created_at * 1000).toLocaleString()}</span>
-            <span className="text-zinc-500">{Math.floor(r.seconds / 60)}:{String(Math.round(r.seconds % 60)).padStart(2, "0")} · {r.segments} segments</span>
-            <span className="min-w-0 flex-1 truncate text-right font-mono text-xs text-zinc-500">{r.file}</span>
-            <Button size="sm" icon={<FolderOpen className="size-3.5" />} onClick={() => api.reveal(p.id, i)}>Show in Finder</Button>
-          </div>
-        </div>
+        <RenderCard key={`${r.file}-${r.created_at}`} projectId={p.id} projectName={p.name} render={r} index={i} />
       ))}
+    </div>
+  );
+}
+
+function RenderCard({
+  projectId,
+  projectName,
+  render: r,
+  index: i,
+}: {
+  projectId: string;
+  projectName: string;
+  render: Render;
+  index: number;
+}) {
+  const isSidecar = inAntigravitySidecar();
+  const [dlBusy, setDlBusy] = useState(false);
+  const [downloadedPath, setDownloadedPath] = useState("");
+  const [driveOpen, setDriveOpen] = useState(false);
+  const [driveFolder, setDriveFolder] = useState(r.drive_folder || loadSavedDriveFolder());
+  const [driveBusy, setDriveBusy] = useState(false);
+  const [drivePending, setDrivePending] = useState(false);
+  const [cardErr, setCardErr] = useState("");
+
+  useEffect(() => {
+    if (r.drive_url) {
+      setDrivePending(false);
+      setDriveOpen(false);
+    }
+  }, [r.drive_url, r.drive_uploaded_at]);
+
+  const filename = r.file.split("/").pop() || `${projectId}-demo.mp4`;
+
+  const handleDownload = async () => {
+    setCardErr("");
+    if (!isSidecar) {
+      const a = document.createElement("a");
+      a.href = videoDownloadUrl(projectId, i);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      return;
+    }
+    setDlBusy(true);
+    try {
+      const out = await api.downloadLocal(projectId, i);
+      setDownloadedPath(out.saved_to);
+    } catch (e) {
+      setCardErr((e as Error).message);
+    } finally {
+      setDlBusy(false);
+    }
+  };
+
+  const handlePushToDrive = async () => {
+    setCardErr("");
+    setDriveBusy(true);
+    try {
+      const trimmedFolder = driveFolder.trim();
+      saveDriveFolder(trimmedFolder);
+      const folderClause = trimmedFolder ? ` into Google Drive folder "${trimmedFolder}"` : " into my Google Drive";
+      const prompt =
+        `Upload rendered MP4 #${i} ("${r.file}") for Voice Demo Lab project "${projectName}" (${projectId})${folderClause} ` +
+        `using the official Google Drive (gdrive) plugin. Once uploaded, record the shareable Drive URL and file ID on render index ${i} ` +
+        `via record_render_drive_upload (or PATCH /api/projects/${projectId}/renders/${i}).`;
+      const sent = await sendToAntigravity(prompt);
+      if (!sent) {
+        throw new Error("Open Voice Demo Studio inside Google Antigravity to push directly via the Google Drive plugin.");
+      }
+      setDrivePending(true);
+      setDriveOpen(false);
+    } catch (e) {
+      setCardErr((e as Error).message);
+    } finally {
+      setDriveBusy(false);
+    }
+  };
+
+  return (
+    <div className="card overflow-hidden">
+      <video src={videoUrl(projectId, i)} controls preload="metadata" className="aspect-video w-full bg-black" />
+      <div className="space-y-2.5 px-4 py-3 text-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-medium text-sm">{new Date(r.created_at * 1000).toLocaleString()}</span>
+          <span className="text-zinc-500">
+            {Math.floor(r.seconds / 60)}:{String(Math.round(r.seconds % 60)).padStart(2, "0")} · {r.segments} segments
+          </span>
+          {r.drive_url && (
+            <Badge tone="green">
+              Synced to Drive{r.drive_folder ? ` (${r.drive_folder})` : ""}
+            </Badge>
+          )}
+          <span className="min-w-0 flex-1 truncate text-right font-mono text-[11px] text-zinc-500" title={r.file}>
+            {filename}
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 pt-0.5">
+          <Button
+            size="sm"
+            variant="primary"
+            busy={dlBusy}
+            icon={<Download className="size-3.5" />}
+            onClick={handleDownload}
+          >
+            Download MP4
+          </Button>
+
+          {r.drive_url ? (
+            <>
+              <a
+                href={r.drive_url}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-800 transition hover:bg-emerald-100 dark:border-emerald-800/60 dark:bg-emerald-950/40 dark:text-emerald-200"
+              >
+                <ExternalLink className="size-3.5" /> Open in Google Drive
+              </a>
+              {isSidecar && (
+                <Button size="sm" variant="ghost" icon={<CloudUpload className="size-3.5" />} onClick={() => setDriveOpen(!driveOpen)}>
+                  Re-push
+                </Button>
+              )}
+            </>
+          ) : (
+            isSidecar && (
+              <Button
+                size="sm"
+                icon={<CloudUpload className="size-3.5" />}
+                onClick={() => setDriveOpen(!driveOpen)}
+              >
+                Push to Google Drive
+              </Button>
+            )
+          )}
+
+          <Button size="sm" variant="ghost" icon={<FolderOpen className="size-3.5" />} onClick={() => api.reveal(projectId, i)}>
+            Show in Finder
+          </Button>
+        </div>
+
+        {driveOpen && (
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-2.5 dark:border-zinc-800 dark:bg-zinc-900/70">
+            <input
+              className="input !w-auto min-w-44 flex-1 !py-1.5 text-xs"
+              value={driveFolder}
+              onChange={(e) => setDriveFolder(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") handlePushToDrive(); }}
+              placeholder="Drive folder name (optional — empty = My Drive root)"
+            />
+            <Button size="sm" variant="primary" busy={driveBusy} icon={<CloudUpload className="size-3.5" />} onClick={handlePushToDrive}>
+              Upload via AGY
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setDriveOpen(false)}>
+              Cancel
+            </Button>
+          </div>
+        )}
+
+        {downloadedPath && (
+          <Alert tone="blue">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="truncate">Saved to <code>{downloadedPath}</code></span>
+              <button
+                onClick={() => api.reveal(projectId, i, true)}
+                className="shrink-0 font-semibold underline"
+              >
+                Reveal in Downloads
+              </button>
+            </div>
+          </Alert>
+        )}
+
+        {drivePending && !r.drive_url && (
+          <Alert tone="blue">
+            Requested Google Drive upload in Antigravity chat — this card will show <strong>Open in Google Drive</strong> automatically once finished.
+          </Alert>
+        )}
+
+        {cardErr && <Alert>{cardErr}</Alert>}
+      </div>
     </div>
   );
 }

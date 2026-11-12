@@ -144,4 +144,14 @@ For projects with `step` segments (either before or right after script approval,
 1. Call `get_project(project_id)` first to pick up any line edits or pacing tweaks the user made in Voice Demo Studio.
 2. Call `check_demo_readiness(project_id)` and resolve any `blockers` (unapproved script, missing step frames, unverified login).
 3. Call `render(project_id, wait=True)` (or `wait=False` + `get_job` for very long videos).
-4. Share the rendered `.mp4` clickable `file://` link and remind the user they can watch it directly in the **Render** tab of `[Voice Demo Studio](sidecar://custom-voice-demo-lab/studio/)`.
+4. Share the rendered `.mp4` clickable `file://` link and remind the user they can watch or download it directly in the **Render** tab of `[Voice Demo Studio](sidecar://custom-voice-demo-lab/studio/)`.
+
+---
+
+### Step 9: Push Rendered Video to Google Drive (`gdrive` Plugin + `record_render_drive_upload`)
+When the user clicks **Push to Google Drive** in **Voice Demo Studio** (or asks in chat to upload a rendered demo MP4 to Google Drive):
+1. Check whether the official **Google Drive** plugin (`antigravity-plugins-official/plugin/gdrive`) is installed and connected (`list_plugin_accounts`).
+   - If **Google Drive** is not installed yet, call `search_marketplace(queries=["google drive", "gdrive"])` and emit `<plugin-card catalog-id="antigravity-plugins-official/plugin/gdrive"></plugin-card>` on its own line so the user can add and connect it in one click, then stop and wait.
+   - If **Google Drive** is installed and signed in, read its `gdrive` skill and upload the rendered `.mp4` (`renders[i].file`) into the requested Drive folder (creating/locating the folder first if specified, or uploading to root My Drive).
+2. Capture the uploaded file's `fileId` and `webViewLink` (`https://drive.google.com/file/d/<fileId>/view`).
+3. Persist the Google Drive link back onto the project render via `record_render_drive_upload(project_id, drive_url=..., drive_file_id=..., drive_folder=..., render_index=i)` (or `PATCH /api/projects/{project_id}/renders/{i}` if running before MCP reload) so **Voice Demo Studio** immediately displays **Open in Google Drive** on that render card.

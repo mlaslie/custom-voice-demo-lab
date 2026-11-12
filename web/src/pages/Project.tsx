@@ -40,10 +40,18 @@ export default function ProjectPage() {
 
   const refresh = useCallback(async () => {
     const x = await api.project(id);
-    setP(x);
+    setP((prev) => (prev && prev.updated_at === x.updated_at ? prev : x));
     return x;
   }, [id]);
-  useEffect(() => { refresh().catch((e) => setErr(e.message)); }, [refresh]);
+  useEffect(() => {
+    refresh().catch((e) => setErr(e.message));
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        refresh().catch(() => {});
+      }
+    }, 3500);
+    return () => clearInterval(timer);
+  }, [refresh]);
   useEffect(() => { api.settings().then(setSettings).catch(() => {}); }, []);
 
   if (err) return <Alert>{err}</Alert>;
