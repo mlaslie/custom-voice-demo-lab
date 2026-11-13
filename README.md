@@ -2,7 +2,7 @@
 
 Automate research-grounded, **1080p (`1920×1080`) and 4K (`3840×2160`)** narrated demo and overview videos from **slides** or **live websites** — orchestrated end-to-end as a plugin inside **Google Antigravity** (primary) and compatible with **Claude Code**, voiced in **your custom Gemini TTS voice** or any standard Gemini voice.
 
-> **Plugin-Only Architecture (`v0.6.0`)**: Voice Demo Lab runs strictly as an AI coding-environment plugin (MCP server + Antigravity Sidecar Studio panel + research subagent + skill) — with zero standalone CLI commands and zero external Playwright browser windows.
+> **Plugin-Only Architecture (`v0.7.0`)**: Voice Demo Lab runs strictly as an AI coding-environment plugin (MCP server + Antigravity Sidecar Studio panel + research subagent + skill) — with zero standalone CLI commands and zero external Playwright browser windows.
 
 ---
 
@@ -103,11 +103,11 @@ claude plugin install custom-voice-demo-lab@voice-demo-lab
 
 ## First-Time Voice Setup
 
-On first use, Antigravity surfaces the **Voice Demo Studio** pill in chat:
+On first use, Antigravity surfaces the **Voice Demo Studio** pill in chat with a 4-tab layout (**Projects**, **Voice Lab**, **Auth**, and **Settings**):
 
-1. **Add your Gemini API key** on the Studio Setup page — saved directly to your OS keychain (`keyring`) and never passed through chat or MCP tool arguments.
-2. **Select a custom or standard voice** (over 2,100 voices across 39 locales) and play a sample clip.
-3. **Set a label, description, and pace** — Voice Demo Lab speaks a short verification phrase and marks the profile **Verified**.
+1. **Add your Gemini API key** on the **Auth** tab — saved directly to your OS keychain (`keyring`), verifiable in place, and never passed through chat or MCP tool arguments.
+2. **Select or record a voice** on the **Voice Lab** tab — choose from over 2,100 standard Gemini voices across 39 locales, pick an existing custom voice, or create a new custom voice right inside Studio using the local-system recording device selector, the live circular HAL 9000 voice meter, a 20s+ reference calibration sample, and the spoken consent statement.
+3. **Configure defaults** on the **Settings** tab — set your default narrator voice, delivery style, pace, output folder, resolution (`1080p` or `4K`), target audience, and Gemini TTS model.
 
 ---
 

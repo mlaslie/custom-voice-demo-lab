@@ -56,6 +56,66 @@
     border: 0;
     white-space: nowrap;
   }
+  .studio-tablist {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    gap: 0.25rem;
+  }
+  .studio-tablist::-webkit-scrollbar {
+    display: none;
+  }
+  .studio-tab {
+    position: relative;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.65rem 0.9rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+    @apply text-zinc-500 transition hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100;
+  }
+  .studio-tab[aria-selected="true"] {
+    @apply text-zinc-950 dark:text-white;
+  }
+  .studio-tab[aria-selected="true"]::after {
+    content: "";
+    position: absolute;
+    inset: auto 0.5rem 0 0.5rem;
+    border-block-end: 3px solid var(--brand-accent);
+  }
+}
+
+dialog:modal {
+  overscroll-behavior: contain;
+  margin: auto;
+}
+
+dialog::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
+  background: rgb(0 0 0 / 0.55);
+  backdrop-filter: blur(2px);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pulse-dot {
+    animation: gentle-pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes gentle-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.45; transform: scale(0.85); }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+  }
 }
 
 @supports not (accent-color: #1a73e8) {

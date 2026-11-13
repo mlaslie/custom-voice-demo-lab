@@ -203,6 +203,11 @@ export interface Project {
   updated_at: number;
 }
 
+export interface RenderDetail extends Render {
+  index: number;
+  size_bytes?: number;
+}
+
 export interface ProjectSummary {
   id: string;
   name: string;
@@ -210,10 +215,12 @@ export interface ProjectSummary {
   base_url: string;
   goal: string;
   resolution?: "" | Resolution;
+  profile_id?: string;
   updated_at: number;
   script_approved: boolean;
   segments: number;
   renders: number;
+  renders_detail?: RenderDetail[];
   sources: number;
   research_count: number;
   web_auth_status: WebAuth["status"];
@@ -255,6 +262,42 @@ export interface Settings {
   fake_gemini: boolean;
 }
 
+export interface AudioInputDevice {
+  id: string;
+  name: string;
+  backend: string;
+  recommended?: boolean;
+}
+
+export interface AudioDevicesResponse {
+  devices: AudioInputDevice[];
+  recommended_id: string;
+}
+
+export interface AudioCaptureTelemetry {
+  active: boolean;
+  recording: boolean;
+  session_id: string;
+  device_id: string;
+  device_name: string;
+  elapsed: number;
+  db: number;
+  energy: number;
+  bands: number[];
+  digital_silence: boolean;
+  error: string;
+}
+
+export interface AudioCaptureStopResult {
+  ok: boolean;
+  seconds: number;
+  audio_b64: string;
+  peak_db: number;
+  digital_silence: boolean;
+  device_name: string;
+  error: string;
+}
+
 export interface PreviewWith { project_id?: string; profile_id?: string; key_id?: string; voice?: string; style?: string; speed?: number }
 
 export interface Job {
@@ -290,6 +333,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
 export const api = {
   settings: () => req<Settings>("GET", "/api/settings"),
   saveSettings: (s: Partial<Settings>) => req<Settings>("PUT", "/api/settings", s),
+  chooseOutputDir: () => req<{ canceled: boolean; path: string }>("POST", "/api/settings/choose-output-dir"),
   models: () => req<{ name: string; display?: string; methods: string[] }[]>("GET", "/api/models"),
   preview: (text: string, w: PreviewWith = {}) => req<Blob>("POST", "/api/voice/preview", { text, ...w }),
   testClip: async (text: string, w: PreviewWith) => {
@@ -303,14 +347,32 @@ export const api = {
   },
   addKey: (name: string, key: string) =>
     req<{ key: ApiKey; custom_voices: number; settings: Settings }>("POST", "/api/keys", { name, key }),
+  verifyKey: (id: string) =>
+    req<{ ok: boolean; custom_voices: number; standard_voices: number }>("POST", `/api/keys/${id}/verify`),
   deleteKey: (id: string) => req<Settings>("DELETE", `/api/keys/${id}`),
   keyVoices: (id: string, locale = "", q = "") =>
     req<KeyVoices>("GET", `/api/keys/${id}/voices?locale=${encodeURIComponent(locale)}&q=${encodeURIComponent(q)}`),
+  createCustomVoice: (b: {
+    key_id: string;
+    name: string;
+    description?: string;
+    style?: string;
+    speed?: number;
+    activate?: boolean;
+    source_audio_b64: string;
+    consent_audio_b64: string;
+  }) => req<{ voice: Voice; settings: Settings }>("POST", "/api/custom-voices", b),
   addProfile: (b: Omit<VoiceProfile, "id" | "verified_at" | "verify_error" | "speed"> & { speed?: number; activate?: boolean }) => req<Settings>("POST", "/api/profiles", b),
   patchProfile: (id: string, b: Partial<VoiceProfile>) => req<Settings>("PATCH", `/api/profiles/${id}`, b),
-  deleteProfile: (id: string) => req<Settings>("DELETE", `/api/profiles/${id}`),
+  deleteProfile: (id: string, deleteRemote = false) =>
+    req<Settings>("DELETE", `/api/profiles/${id}${deleteRemote ? "?delete_remote=true" : ""}`),
   activateProfile: (id: string) => req<Settings>("POST", `/api/profiles/${id}/activate`),
   verifyProfile: (id: string) => req<{ ok: boolean; error: string; settings: Settings }>("POST", `/api/profiles/${id}/verify`),
+  audioDevices: () => req<AudioDevicesResponse>("GET", "/api/audio/devices"),
+  startAudioCapture: (device_id = "", record = true) =>
+    req<AudioCaptureTelemetry>("POST", "/api/audio/capture/start", { device_id, record }),
+  audioCaptureStatus: () => req<AudioCaptureTelemetry>("GET", "/api/audio/capture/status"),
+  stopAudioCapture: () => req<AudioCaptureStopResult>("POST", "/api/audio/capture/stop"),
 
   projects: () => req<ProjectSummary[]>("GET", "/api/projects"),
   project: (id: string) => req<Project>("GET", `/api/projects/${id}`),

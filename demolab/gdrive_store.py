@@ -278,6 +278,60 @@ def choose_save_path(default_filename: str, default_dir: pathlib.Path | None = N
     return start_dir / default_filename
 
 
+def choose_directory(default_dir: pathlib.Path | None = None) -> pathlib.Path | None:
+    """Open a native OS folder picker dialog so the user can choose an output directory."""
+    start_dir = default_dir if (default_dir and default_dir.exists()) else pathlib.Path.home()
+
+    if sys.platform == "darwin":
+        safe_dir = _escape_applescript(str(start_dir))
+        apple_script = (
+            f'set defLoc to POSIX file "{safe_dir}" as alias\n'
+            f'tell application (path to frontmost application as text)\n'
+            f'    set chosenFolder to choose folder with prompt "Select Output Folder for Rendered MP4s:" default location defLoc\n'
+            f'    return POSIX path of chosenFolder\n'
+            f'end tell'
+        )
+        res = subprocess.run(["osascript", "-e", apple_script], capture_output=True, text=True, timeout=300)
+        if res.returncode != 0:
+            if "-128" in (res.stderr or "") or "canceled" in (res.stderr or "").lower():
+                return None
+            fallback = (
+                f'POSIX path of (choose folder with prompt "Select Output Folder for Rendered MP4s:" '
+                f'default location (POSIX file "{safe_dir}" as alias))'
+            )
+            res2 = subprocess.run(["osascript", "-e", fallback], capture_output=True, text=True, timeout=300)
+            if res2.returncode != 0:
+                return None
+            chosen = res2.stdout.strip()
+        else:
+            chosen = res.stdout.strip()
+        return pathlib.Path(chosen.rstrip("/")) if chosen else None
+
+    if sys.platform.startswith("win"):
+        ps = (
+            "Add-Type -AssemblyName System.Windows.Forms; "
+            "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
+            f"$d.SelectedPath = '{str(start_dir)}'; "
+            "if ($d.ShowDialog() -eq 'OK') { Write-Output $d.SelectedPath }"
+        )
+        res = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=300)
+        chosen = res.stdout.strip()
+        return pathlib.Path(chosen) if chosen else None
+
+    if shutil_which("zenity"):
+        res = subprocess.run(
+            ["zenity", "--file-selection", "--directory", f"--filename={start_dir}/"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            return pathlib.Path(res.stdout.strip())
+        return None
+
+    return start_dir
+
+
 def shutil_which(cmd: str) -> str | None:
     import shutil
     return shutil.which(cmd)

@@ -72,7 +72,7 @@ export function VoicePicker({ keyId, value, onPick }: { keyId: string; value: st
                 </span>
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-medium">{v.name}</span>
-                  <span className="block truncate font-mono text-[11px] text-zinc-500">{v.id}{v.locale ? ` · ${localeName(v.locale)}` : ""}</span>
+                  <span className="block truncate font-mono text-xs text-zinc-500">{v.id}{v.locale ? ` · ${localeName(v.locale)}` : ""}</span>
                 </span>
               </button>
               <VoiceButton text={SAMPLE} with={{ key_id: keyId, voice: v.id }} label="Sample" />

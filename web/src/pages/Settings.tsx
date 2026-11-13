@@ -1,183 +1,321 @@
-import { KeyRound, Lock, Mic, Plus, Save, Trash2 } from "lucide-react";
+import { FolderOpen, Save } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type Settings } from "../api";
-import { VerifyStatus } from "../components/VerifyStatus";
 import { PacingControl } from "../components/PacingControl";
-import { Alert, Badge, Button, Field } from "../components/ui";
+import { Alert, Button, Field } from "../components/ui";
+
+const STYLE_CHIPS = [
+  {
+    label: "Product Narrator",
+    style: "clear, warm, confident product-demo narrator; unhurried pace",
+  },
+  {
+    label: "Executive Briefing",
+    style: "authoritative executive briefing, crisp and composed",
+  },
+  {
+    label: "Developer Walkthrough",
+    style: "energetic developer walkthrough, upbeat and conversational",
+  },
+];
 
 export default function SettingsPage({ onChange }: { onChange: (s: Settings) => void }) {
   const [s, setS] = useState<Settings | null>(null);
   const [models, setModels] = useState<string[]>([]);
-  const [msg, setMsg] = useState<{ tone: "red" | "blue"; text: string } | null>(null);
+  const [selectedProfileId, setSelectedProfileId] = useState("");
+  const [voiceStyle, setVoiceStyle] = useState("");
+  const [voiceSpeed, setVoiceSpeed] = useState(1.0);
+  const [voiceNote, setVoiceNote] = useState("");
+  const [outputDir, setOutputDir] = useState("");
+  const [defaultRes, setDefaultRes] = useState<"1080p" | "4k">("1080p");
+  const [audience, setAudience] = useState("");
+  const [ttsModel, setTtsModel] = useState("");
   const [busy, setBusy] = useState("");
-  const [adding, setAdding] = useState(false);
-  const [keyName, setKeyName] = useState("");
-  const [secret, setSecret] = useState("");
+  const [msg, setMsg] = useState<{ tone: "red" | "blue"; text: string } | null>(null);
 
-  const update = (n: Settings) => { setS(n); onChange(n); };
-  useEffect(() => { api.settings().then(update); }, []);
+  const hydrate = (next: Settings, preferId?: string) => {
+    setS(next);
+    onChange(next);
+    const pid =
+      preferId && next.profiles.some((v) => v.id === preferId)
+        ? preferId
+        : next.active_profile || next.profiles[0]?.id || "";
+    setSelectedProfileId(pid);
+    const prof = next.profiles.find((v) => v.id === pid) ?? next.active;
+    if (prof) {
+      setVoiceStyle(prof.style);
+      setVoiceSpeed(prof.speed);
+      setVoiceNote(prof.description);
+    }
+    setOutputDir(next.output_dir);
+    setDefaultRes(next.default_resolution || "1080p");
+    setAudience(next.audience);
+    setTtsModel(next.tts_model);
+  };
+
   useEffect(() => {
-    if (s && !s.setup_needed) api.models().then((m) => setModels(m.filter((x) => x.methods.includes("generateContent")).map((x) => x.name))).catch(() => {});
-  }, [s?.setup_needed]);   // eslint-disable-line react-hooks/exhaustive-deps
+    api.settings().then((loaded) => hydrate(loaded)).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (s && !s.setup_needed) {
+      api
+        .models()
+        .then((m) => setModels(m.filter((x) => x.methods.includes("generateContent")).map((x) => x.name)))
+        .catch(() => {});
+    }
+  }, [s?.setup_needed]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!s) return null;
-  const set = (k: keyof Settings) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setS({ ...s, [k]: e.target.value });
-  const keyName_ = (id: string) => { const k = s.keys.find((x) => x.id === id); return k ? `${k.name} (…${k.hint})` : "missing key"; };
 
-  const run = async (name: string, fn: () => Promise<void>) => {
-    setBusy(name); setMsg(null);
-    try { await fn(); } catch (e) { setMsg({ tone: "red", text: (e as Error).message }); } finally { setBusy(""); }
+  const handleVoicePick = (pid: string) => {
+    setSelectedProfileId(pid);
+    const prof = s.profiles.find((v) => v.id === pid);
+    if (prof) {
+      setVoiceStyle(prof.style);
+      setVoiceSpeed(prof.speed);
+      setVoiceNote(prof.description);
+    }
+  };
+
+  const handleBrowseOutput = async () => {
+    setMsg(null);
+    setBusy("browse");
+    try {
+      const r = await api.chooseOutputDir();
+      if (!r.canceled && r.path) {
+        setOutputDir(r.path);
+      }
+    } catch (e) {
+      setMsg({ tone: "red", text: (e as Error).message });
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy("save");
+    setMsg(null);
+    try {
+      let latest = await api.saveSettings({
+        output_dir: outputDir.trim() || s.output_dir,
+        default_resolution: defaultRes,
+        audience,
+        tts_model: ttsModel.trim() || s.tts_model,
+      });
+
+      if (selectedProfileId) {
+        if (selectedProfileId !== latest.active_profile) {
+          latest = await api.activateProfile(selectedProfileId);
+        }
+        latest = await api.patchProfile(selectedProfileId, {
+          style: voiceStyle,
+          speed: voiceSpeed,
+          description: voiceNote.trim(),
+        });
+      }
+
+      hydrate(latest, selectedProfileId);
+      setMsg({
+        tone: "blue",
+        text: `Settings saved${latest.active ? ` (Default voice: ${latest.active.name} at ${latest.active.speed.toFixed(2)}×)` : ""}.`,
+      });
+    } catch (e2) {
+      setMsg({ tone: "red", text: (e2 as Error).message });
+    } finally {
+      setBusy("");
+    }
   };
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="mx-auto max-w-4xl space-y-5">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-        <p className="mt-1 text-sm text-zinc-500">Stored on this machine and used by every session, in Claude, Antigravity or the browser.</p>
+        <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
+        <p className="mt-0.5 text-xs text-zinc-500">
+          Configure your default narrator voice, delivery style, speed/pace, usage note, output path, resolution, and default audience.
+        </p>
       </div>
+
       {msg && <Alert tone={msg.tone}>{msg.text}</Alert>}
 
-      <section className="card space-y-4 p-5">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="flex items-center gap-2 font-semibold"><Mic className="size-4 text-brand-600" />Voices</h2>
-          <Link to={s.keys.length === 1 ? `/setup?use=${s.keys[0].id}` : "/setup"}><Button size="sm" icon={<Plus className="size-4" />}>Add a voice</Button></Link>
-        </div>
-        <p className="text-sm text-zinc-500">Each voice pairs a saved key with one of its custom voices or a standard voice, with a label and a description your agent can choose by. The active one narrates every project that has not picked its own.</p>
-        {!s.profiles.length && <Alert tone="blue">No voices yet. <Link className="font-medium underline" to="/setup">Set one up</Link>.</Alert>}
-        <div className="divide-y divide-zinc-100 rounded-xl border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
-          {s.profiles.map((v) => {
-            const on = v.id === s.active_profile;
-            return (
-              <div key={v.id} className={`grid gap-3 p-3 sm:grid-cols-[auto_1fr_auto] sm:items-start ${on ? "bg-brand-50/60 dark:bg-brand-700/10" : ""}`}>
-                <input type="radio" name="active" className="mt-2.5 size-4 accent-brand-600" checked={on} title="Make this the active voice"
-                  onChange={() => run("act", async () => update(await api.activateProfile(v.id)))} />
-                <div className="min-w-0 space-y-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <input className="min-w-0 flex-1 bg-transparent font-medium outline-none focus:underline decoration-brand-500/40" defaultValue={v.name}
-                      onBlur={(e) => e.target.value.trim() && e.target.value !== v.name && run("p", async () => update(await api.patchProfile(v.id, { name: e.target.value.trim() })))} />
-                    {on && <Badge tone="blue">active</Badge>}
-                    <Badge tone={v.kind === "custom" ? "violet" : "zinc"}>{v.kind}</Badge>
-                    <VerifyStatus profile={v} onChange={update} />
+      <form onSubmit={handleSave} className="space-y-4">
+        {/* Default Voice & Delivery */}
+        <section className="card space-y-4 p-4 sm:p-5">
+          <h2 className="text-sm font-semibold">Default Voice &amp; Delivery</h2>
+
+          {!s.profiles.length ? (
+            <Alert tone="blue">
+              No voice profiles yet. Create or pair one on the{" "}
+              <Link to="/voice-lab" className="font-semibold underline">
+                Voice Lab tab
+              </Link>
+              .
+            </Alert>
+          ) : (
+            <>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Default voice to use">
+                  <select
+                    className="input"
+                    value={selectedProfileId}
+                    onChange={(e) => handleVoicePick(e.target.value)}
+                  >
+                    {s.profiles.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.name} ({v.kind === "custom" ? "Custom" : "Standard"})
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+
+                <div className="space-y-1.5">
+                  <Field label="Delivery style">
+                    <input
+                      className="input"
+                      value={voiceStyle}
+                      onChange={(e) => setVoiceStyle(e.target.value)}
+                      placeholder="clear, warm, confident product-demo narrator; unhurried pace"
+                    />
+                  </Field>
+                  <div className="flex flex-wrap gap-1.5">
+                    {STYLE_CHIPS.map((c) => (
+                      <button
+                        key={c.label}
+                        type="button"
+                        onClick={() => setVoiceStyle(c.style)}
+                        className="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-xs text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                      >
+                        {c.label}
+                      </button>
+                    ))}
                   </div>
-                  <input className="w-full bg-transparent text-sm text-zinc-600 outline-none placeholder:text-zinc-400 focus:underline decoration-brand-500/40 dark:text-zinc-300" defaultValue={v.description} placeholder="Add a description: when to use this voice"
-                    onBlur={(e) => e.target.value !== v.description && run("p", async () => update(await api.patchProfile(v.id, { description: e.target.value.trim() })))} />
-                  <div className="truncate text-xs text-zinc-500">{v.voice_name || v.voice} · <span className="font-mono">{v.voice}</span> · key: {keyName_(v.key_id)}</div>
-                  <input className="input text-xs" defaultValue={v.style} placeholder="Delivery style"
-                    onBlur={(e) => e.target.value !== v.style && run("p", async () => update(await api.patchProfile(v.id, { style: e.target.value })))} />
-                  <PacingControl value={v.speed} with={{ profile_id: v.id }}
-                    onChange={(speed) => { setS({ ...s, profiles: s.profiles.map((x) => (x.id === v.id ? { ...x, speed } : x)) }); run("p", async () => update(await api.patchProfile(v.id, { speed }))); }} />
-                  {v.verify_error && <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">{v.verify_error}</p>}
-                </div>
-                <div className="flex items-center gap-1 sm:pt-1">
-                  <Button size="sm" variant="danger" title="Delete this voice"
-                    onClick={() => confirm(`Delete the voice "${v.name}"?`) && run("del", async () => update(await api.deleteProfile(v.id)))}><Trash2 className="size-4" /></Button>
                 </div>
               </div>
-            );
-          })}
-        </div>
-      </section>
 
-      <section className="card space-y-4 p-5">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="flex items-center gap-2 font-semibold"><KeyRound className="size-4 text-brand-600" />Gemini API keys</h2>
-          {!adding && <Button size="sm" icon={<Plus className="size-4" />} onClick={() => setAdding(true)}>Add a key</Button>}
-        </div>
-        {s.key_source === "env" && <Alert tone="blue">$GEMINI_API_KEY is set in the environment and is used instead of the saved keys.</Alert>}
-        <p className="flex items-start gap-2 text-xs text-zinc-500"><Lock className="mt-0.5 size-3.5 shrink-0" />
-          Keys are kept in your system keychain. Only a name and the last four characters are shown, and they never pass through the chat or the AI assistant.</p>
-        {adding && (
-          <div className="grid gap-3 rounded-xl bg-zinc-50 p-3 sm:grid-cols-[1fr_2fr_auto] sm:items-end dark:bg-zinc-950">
-            <Field label="Name"><input className="input" value={keyName} onChange={(e) => setKeyName(e.target.value)} placeholder="Work project" /></Field>
-            <Field label="API key"><input className="input font-mono" type="password" autoComplete="off" spellCheck={false} value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="AIza…" /></Field>
+              <div className="rounded-xl border border-zinc-200 bg-zinc-50/70 p-3.5 dark:border-zinc-800 dark:bg-zinc-950">
+                <PacingControl
+                  label="Speed / Pace"
+                  value={voiceSpeed}
+                  onChange={setVoiceSpeed}
+                  with={{
+                    profile_id: selectedProfileId,
+                    style: voiceStyle,
+                  }}
+                />
+              </div>
+
+              <Field
+                label="When to use this voice (note / description)"
+                hint="Helps Antigravity decide automatically when to choose this voice profile."
+              >
+                <textarea
+                  className="input min-h-16"
+                  value={voiceNote}
+                  onChange={(e) => setVoiceNote(e.target.value)}
+                  placeholder="Default voice for executive product demos, release briefings, and architecture walkthroughs."
+                />
+              </Field>
+            </>
+          )}
+        </section>
+
+        {/* Output Path, Resolution & Audience */}
+        <section className="card space-y-4 p-4 sm:p-5">
+          <h2 className="text-sm font-semibold">Output Path, Resolution &amp; Audience</h2>
+
+          <Field label="Output path" hint="Rendered MP4 videos and frame caches are saved here.">
             <div className="flex gap-2">
-              <Button variant="ghost" onClick={() => { setAdding(false); setSecret(""); }}>Cancel</Button>
-              <Button variant="primary" busy={busy === "key"} disabled={!secret.trim()}
-                onClick={() => run("key", async () => {
-                  const r = await api.addKey(keyName || "Gemini key", secret.trim());
-                  update(r.settings); setSecret(""); setKeyName(""); setAdding(false);
-                  setMsg({ tone: "blue", text: `Key saved. Its project has ${r.custom_voices} custom voice${r.custom_voices === 1 ? "" : "s"}; add a voice to use it.` });
-                })}>Check and save</Button>
+              <input
+                className="input font-mono"
+                value={outputDir}
+                onChange={(e) => setOutputDir(e.target.value)}
+                autoCorrect="off"
+                autoCapitalize="none"
+                spellCheck={false}
+              />
+              <Button
+                type="button"
+                variant="secondary"
+                busy={busy === "browse"}
+                icon={<FolderOpen className="size-4" />}
+                onClick={handleBrowseOutput}
+              >
+                Browse…
+              </Button>
             </div>
-          </div>
-        )}
-        <div className="divide-y divide-zinc-100 rounded-xl border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
-          {s.keys.map((k) => {
-            const used = s.profiles.filter((v) => v.key_id === k.id).length;
-            return (
-              <div key={k.id} className="flex items-center gap-3 px-3 py-2.5">
-                <KeyRound className="size-4 shrink-0 text-zinc-400" />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium">{k.name}</div>
-                  <div className="font-mono text-xs text-zinc-500">••••••••{k.hint} · used by {used} voice{used === 1 ? "" : "s"}</div>
-                </div>
-                <Link to={`/setup?use=${k.id}`}><Button size="sm" variant="ghost">Add voice</Button></Link>
-                <Button size="sm" variant="danger" disabled={used > 0} title={used ? "Delete the voices that use it first" : "Delete this key"}
-                  onClick={() => confirm(`Delete the key "${k.name}" from the keychain?`) && run("delk", async () => update(await api.deleteKey(k.id)))}><Trash2 className="size-4" /></Button>
-              </div>
-            );
-          })}
-          {!s.keys.length && <div className="px-3 py-4 text-sm text-zinc-500">No keys saved.</div>}
+          </Field>
+
+          <fieldset className="space-y-2">
+            <legend className="label">Default video resolution</legend>
+            <div className="flex flex-wrap gap-3">
+              <label
+                htmlFor="default-res-1080p"
+                className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-300 px-3 py-2 text-xs dark:border-zinc-700"
+              >
+                <input
+                  type="radio"
+                  id="default-res-1080p"
+                  name="default-resolution"
+                  value="1080p"
+                  checked={defaultRes === "1080p"}
+                  onChange={() => setDefaultRes("1080p")}
+                />
+                <span>1080p · Full HD (1920×1080)</span>
+              </label>
+              <label
+                htmlFor="default-res-4k"
+                className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-300 px-3 py-2 text-xs dark:border-zinc-700"
+              >
+                <input
+                  type="radio"
+                  id="default-res-4k"
+                  name="default-resolution"
+                  value="4k"
+                  checked={defaultRes === "4k"}
+                  onChange={() => setDefaultRes("4k")}
+                />
+                <span>4K · Ultra HD (3840×2160)</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <Field
+            label="Default audience for video"
+            hint="Shapes narration depth, tone, and how much background context each script includes."
+          >
+            <textarea
+              className="input min-h-16"
+              value={audience}
+              onChange={(e) => setAudience(e.target.value)}
+            />
+          </Field>
+
+          <Field
+            label="Text-to-speech model"
+            hint="Your coding agent writes scripts; this Gemini model synthesizes voice narration."
+          >
+            <input
+              className="input font-mono"
+              value={ttsModel}
+              onChange={(e) => setTtsModel(e.target.value)}
+              list="models"
+            />
+          </Field>
+          <datalist id="models">
+            {models.map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
+        </section>
+
+        <div className="flex justify-end">
+          <Button type="submit" variant="primary" busy={busy === "save"} icon={<Save className="size-4" />}>
+            Save Settings
+          </Button>
         </div>
-      </section>
-
-      <section className="card space-y-4 p-5">
-        <h2 className="font-semibold">Voice model and audience</h2>
-        <Field label="Text-to-speech model" hint="Your coding agent writes the scripts; this Gemini model only speaks them."><input className="input font-mono" value={s.tts_model} onChange={set("tts_model")} list="models" /></Field>
-        <datalist id="models">{models.map((m) => <option key={m} value={m} />)}</datalist>
-        <Field label="Default audience" hint="Shapes how much the script explains."><textarea className="input min-h-16" value={s.audience} onChange={set("audience")} /></Field>
-      </section>
-
-      <section className="card space-y-4 p-5">
-        <h2 className="font-semibold">Output</h2>
-        <Field label="Render folder" hint="Videos and the temporary frame cache go here. Point it at an external drive for long demos.">
-          <input className="input font-mono" value={s.output_dir} onChange={set("output_dir")} />
-        </Field>
-        <fieldset className="space-y-2">
-          <legend className="label">Default video resolution</legend>
-          <div className="flex flex-wrap gap-3">
-            <label
-              htmlFor="default-res-1080p"
-              className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700"
-            >
-              <input
-                type="radio"
-                id="default-res-1080p"
-                name="default-resolution"
-                value="1080p"
-                checked={(s.default_resolution || "1080p") === "1080p"}
-                onChange={() => setS({ ...s, default_resolution: "1080p" })}
-              />
-              <span>1080p · Full HD (1920×1080)</span>
-            </label>
-            <label
-              htmlFor="default-res-4k"
-              className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700"
-            >
-              <input
-                type="radio"
-                id="default-res-4k"
-                name="default-resolution"
-                value="4k"
-                checked={s.default_resolution === "4k"}
-                onChange={() => setS({ ...s, default_resolution: "4k" })}
-              />
-              <span>4K · Ultra HD (3840×2160)</span>
-            </label>
-          </div>
-          <p className="text-xs text-zinc-500">
-            Projects without an explicit override use this resolution. Both 1080p and 4K can be toggled per project.
-          </p>
-        </fieldset>
-      </section>
-
-      <div className="sticky bottom-4 flex justify-end">
-        <Button variant="primary" icon={<Save className="size-4" />} busy={busy === "save"}
-          onClick={() => run("save", async () => { update(await api.saveSettings(s)); setMsg({ tone: "blue", text: "Settings saved." }); })}>
-          Save settings
-        </Button>
-      </div>
+      </form>
     </div>
   );
 }

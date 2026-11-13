@@ -2,7 +2,7 @@
   "$schema": "https://antigravity.google/schemas/v1/plugin.json",
   "name": "custom-voice-demo-lab",
   "displayName": "Voice Demo Lab",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Automate research-grounded 1080p and 4K demo and overview videos from slides or live websites in Google Antigravity, voiced in your custom or standard Gemini TTS voice.",
   "suggestedPrompts": [
     "Create a narrated demo video from the slides we built in this session",

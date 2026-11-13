@@ -151,7 +151,7 @@ export default function ProjectPage() {
                   </div>
                   {r.summary && <p className="mt-1.5 text-zinc-600 dark:text-zinc-400">{r.summary}</p>}
                   {r.verified_claims?.length > 0 && (
-                    <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-[11px] text-zinc-500">
+                    <ul className="mt-1.5 list-disc space-y-0.5 pl-4 text-xs text-zinc-500">
                       {r.verified_claims.map((c, idx) => <li key={idx}>{c}</li>)}
                     </ul>
                   )}
@@ -167,7 +167,7 @@ export default function ProjectPage() {
           <Field label="Target website URL (for AGY Browser steps)">
             <input className="input" defaultValue={p.base_url} onBlur={(e) => e.target.value !== p.base_url && saveBrief({ base_url: e.target.value.trim() })} placeholder="https://console.cloud.google.com" />
           </Field>
-          <Field label="Narrator voice" hint={<>Manage keys & custom voices in <Link className="underline" to="/settings">Voices</Link>.</>}>
+          <Field label="Narrator voice" hint={<>Manage keys & custom voices in <Link className="underline" to="/voice-lab">Voice Lab</Link>.</>}>
             <select className="input" value={p.profile_id} onChange={(e) => saveBrief({ profile_id: e.target.value })}>
               <option value="">Active voice{settings?.active ? ` (${settings.active.name})` : ""}</option>
               {settings?.profiles.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
@@ -217,7 +217,7 @@ export default function ProjectPage() {
                 active ? "bg-brand-600 text-white shadow-sm" : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
               }`}
             >
-              <span className={`grid size-4.5 place-items-center rounded-full text-[10px] ${active ? "bg-white/20" : done[t.key] ? "bg-emerald-500 text-white" : "bg-zinc-200 dark:bg-zinc-700"}`}>
+              <span className={`grid size-4.5 place-items-center rounded-full text-xs ${active ? "bg-white/20" : done[t.key] ? "bg-emerald-500 text-white" : "bg-zinc-200 dark:bg-zinc-700"}`}>
                 {done[t.key] && !active ? <Check className="size-3" /> : i + 1}
               </span>
               <span>{t.label}</span>

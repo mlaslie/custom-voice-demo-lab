@@ -89,7 +89,7 @@ export default function RenderTab({ project: p, setProject, refresh, goto }: Tab
     {
       ok: !!s && !s.setup_needed,
       label: `Narrator voice: ${s?.profiles.find((v) => v.id === p.profile_id)?.name ?? s?.active?.name ?? "none"}`,
-      fix: <Link className="underline" to="/setup">Setup</Link>,
+      fix: <Link className="underline" to="/voice-lab">Voice Lab</Link>,
     },
     {
       ok: (p.research?.length ?? 0) > 0 || Boolean(p.research_summary?.trim()),
@@ -407,7 +407,7 @@ function RenderCard({
               Synced to Drive{r.drive_folder ? ` (${r.drive_folder})` : ""}
             </Badge>
           )}
-          <span className="min-w-0 flex-1 truncate text-right font-mono text-[11px] text-zinc-500" title={r.file}>
+          <span className="min-w-0 flex-1 truncate text-right font-mono text-xs text-zinc-500" title={r.file}>
             {filename}
           </span>
         </div>

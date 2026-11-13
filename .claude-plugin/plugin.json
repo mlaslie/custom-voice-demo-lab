@@ -1,6 +1,6 @@
 {
   "name": "custom-voice-demo-lab",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Automate research-grounded 1080p and 4K demo and overview videos from slides or live websites, voiced in your custom or standard Gemini TTS voice.",
   "author": { "name": "Matthew Laslie" },
   "repository": "https://github.com/mlaslie/custom-voice-demo-lab",

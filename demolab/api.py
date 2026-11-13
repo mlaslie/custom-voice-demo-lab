@@ -1,6 +1,7 @@
 """Local HTTP API + Studio static assets. Binds to 127.0.0.1; rejects non-local Host/Origin headers."""
 from __future__ import annotations
 
+import base64
 import pathlib
 import shutil
 import subprocess
@@ -13,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import agy_browser, config, gdrive_store, gemini, jobs, pipeline, script, sources, store
+from . import agy_browser, audio_input, config, gdrive_store, gemini, jobs, pipeline, script, sources, store
 from .models import Project, ProjectResolution, ResearchItem, Resolution, Scenario, Segment
 
 STATIC = pathlib.Path(__file__).parent / "static"
@@ -92,6 +93,13 @@ def put_settings(b: SettingsIn):
     return config.public_settings()
 
 
+@app.post("/api/settings/choose-output-dir")
+def choose_output_dir():
+    cur = pathlib.Path(config.load().output_dir).expanduser()
+    chosen = gdrive_store.choose_directory(cur)
+    return {"canceled": chosen is None, "path": str(chosen) if chosen else ""}
+
+
 # ---- API keys, voices and voice profiles ---------------------------------------------------------
 # Keys arrive only here, from the local Studio UI, and go straight to the OS keychain. Nothing returns them.
 
@@ -118,6 +126,19 @@ def add_key(k: KeyIn):
 def delete_key(kid: str):
     config.delete_key(kid)
     return config.public_settings()
+
+
+@app.post("/api/keys/{kid}/verify")
+def verify_key(kid: str):
+    config.load().key(kid)
+    key_val = config.key_value(kid)
+    gemini.invalidate_voices_cache(key_val)
+    voices = gemini.list_voices(key_val)
+    return {
+        "ok": True,
+        "custom_voices": sum(v["kind"] == "custom" for v in voices),
+        "standard_voices": sum(v["kind"] == "standard" for v in voices),
+    }
 
 
 @app.get("/api/keys/{kid}/voices")
@@ -213,15 +234,83 @@ def verify_profile(vid: str):
     return {"ok": not v.verify_error, "error": v.verify_error, "settings": config.public_settings()}
 
 
+def _decode_audio_b64(raw: str) -> bytes:
+    cleaned = raw.strip()
+    if "," in cleaned and cleaned.lower().startswith("data:"):
+        cleaned = cleaned.split(",", 1)[1]
+    try:
+        return base64.b64decode(cleaned, validate=True)
+    except Exception as e:
+        raise ValueError(f"Invalid base64 audio payload: {e}") from e
+
+
+class CustomVoiceCreateIn(BaseModel):
+    key_id: str
+    name: str
+    description: str = ""
+    style: str = config.DEFAULT_STYLE
+    speed: float = 1.0
+    activate: bool = True
+    source_audio_b64: str
+    consent_audio_b64: str
+
+
+@app.post("/api/custom-voices")
+def create_custom_voice(b: CustomVoiceCreateIn):
+    s = config.load()
+    s.key(b.key_id)
+    key_val = config.key_value(b.key_id)
+    src_bytes = _decode_audio_b64(b.source_audio_b64)
+    consent_bytes = _decode_audio_b64(b.consent_audio_b64)
+    created = gemini.create_custom_voice(
+        key_val,
+        display_name=b.name,
+        source_audio=src_bytes,
+        consent_audio=consent_bytes,
+        model=s.tts_model,
+    )
+    added: list[str] = []
+
+    def add(cfg: config.Settings):
+        cfg.key(b.key_id)
+        v = config.VoiceProfile(
+            name=b.name.strip() or created["name"],
+            description=b.description.strip(),
+            speed=b.speed,
+            key_id=b.key_id,
+            voice=created["id"],
+            voice_name=created["name"],
+            kind="custom",
+            style=b.style or config.DEFAULT_STYLE,
+        )
+        cfg.profiles.append(v)
+        if b.activate or not cfg.active_profile:
+            cfg.active_profile = v.id
+        added.append(v.id)
+
+    config.mutate(add)
+    pipeline.verify_profile(added[0])
+    return {"voice": created, "settings": config.public_settings()}
+
+
 @app.delete("/api/profiles/{vid}")
-def delete_profile(vid: str):
+def delete_profile(vid: str, delete_remote: bool = False):
+    removed: list[config.VoiceProfile] = []
+    remaining_same_voice: list[bool] = []
+
     def drop(s: config.Settings):
-        s.profile(vid)
+        target = s.profile(vid)
+        removed.append(target)
         s.profiles = [v for v in s.profiles if v.id != vid]
         if s.active_profile == vid:
             s.active_profile = s.profiles[0].id if s.profiles else ""
+        remaining_same_voice.append(
+            any(v.key_id == target.key_id and v.voice == target.voice for v in s.profiles)
+        )
 
     config.mutate(drop)
+    if delete_remote and removed and removed[0].kind == "custom" and not any(remaining_same_voice):
+        gemini.delete_custom_voice(config.key_value(removed[0].key_id), removed[0].voice)
     return config.public_settings()
 
 
@@ -264,6 +353,31 @@ def voice_preview(v: PreviewIn):
     )
 
 
+class AudioCaptureIn(BaseModel):
+    device_id: str = ""
+    record: bool = True
+
+
+@app.get("/api/audio/devices")
+def audio_devices():
+    return audio_input.list_input_devices()
+
+
+@app.post("/api/audio/capture/start")
+def start_audio_capture(b: AudioCaptureIn):
+    return audio_input.start_capture(b.device_id, record=b.record)
+
+
+@app.get("/api/audio/capture/status")
+def audio_capture_status():
+    return audio_input.get_telemetry()
+
+
+@app.post("/api/audio/capture/stop")
+def stop_audio_capture():
+    return audio_input.stop_capture()
+
+
 # ---- projects -----------------------------------------------------------------------------------
 
 class ProjectIn(BaseModel):
@@ -278,13 +392,39 @@ class ProjectIn(BaseModel):
     profile_id: str = ""
 
 
+def _render_size(file_path: str) -> int:
+    try:
+        p = pathlib.Path(file_path)
+        return p.stat().st_size if p.is_file() else 0
+    except OSError:
+        return 0
+
+
 @app.get("/api/projects")
 def list_projects():
     return [
-        p.model_dump(include={"id", "name", "scenario", "base_url", "goal", "resolution", "updated_at", "script_approved"})
+        p.model_dump(include={"id", "name", "scenario", "base_url", "goal", "resolution", "profile_id", "updated_at", "script_approved"})
         | {
             "segments": len(p.segments),
             "renders": len(p.renders),
+            "renders_detail": [
+                {
+                    "index": idx,
+                    "file": r.file,
+                    "created_at": r.created_at,
+                    "seconds": r.seconds,
+                    "segments": r.segments,
+                    "resolution": r.resolution,
+                    "width": r.width,
+                    "height": r.height,
+                    "drive_file_id": r.drive_file_id,
+                    "drive_url": r.drive_url,
+                    "drive_folder": r.drive_folder,
+                    "drive_uploaded_at": r.drive_uploaded_at,
+                    "size_bytes": _render_size(r.file),
+                }
+                for idx, r in enumerate(p.renders)
+            ],
             "sources": len(p.sources),
             "research_count": len(p.research),
             "web_auth_status": p.web_auth.status,

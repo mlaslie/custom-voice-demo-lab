@@ -39,7 +39,7 @@ export function Badge({ children, tone = "zinc" }: { children: ReactNode; tone?:
     red: "bg-red-50 text-red-700 dark:bg-red-900/40 dark:text-red-300",
     violet: "bg-violet-50 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300",
   }[tone];
-  return <span className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${t}`}>{children}</span>;
+  return <span className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-semibold uppercase tracking-wide ${t}`}>{children}</span>;
 }
 
 export function Field({ label, hint, children, className = "" }: { label: string; hint?: ReactNode; children: ReactNode; className?: string }) {

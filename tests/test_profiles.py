@@ -1,9 +1,12 @@
+import base64
+import io
 import json
+import wave
 
 import pytest
 from fastapi.testclient import TestClient
 
-from demolab import config
+from demolab import config, store
 
 
 @pytest.fixture
@@ -12,6 +15,7 @@ def home(tmp_path, monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.setattr(config, "HOME", tmp_path)
     monkeypatch.setattr(config, "SETTINGS", tmp_path / "settings.json")
+    monkeypatch.setattr(store, "ROOT", tmp_path / "projects")
     return tmp_path
 
 
@@ -123,3 +127,110 @@ def test_pacing(home, monkeypatch):
     assert pipeline.voice_for(store.get(p["id"])).speed == 1.2
     c.patch(f"/api/projects/{p['id']}", json={"speed": 0})                 # back to the voice's pace
     assert pipeline.voice_for(store.get(p["id"])).speed == 1.0
+
+
+def _silent_wav_b64(seconds: float = 0.25) -> str:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(24000)
+        wf.writeframes(b"\x00\x00" * int(24000 * seconds))
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def test_key_verify_custom_voice_and_projects_detail(home):
+    from demolab.api import app
+
+    c = TestClient(app, base_url="http://127.0.0.1")
+    k = c.post("/api/keys", json={"name": "Primary", "key": "AIzaFAKEFAKEFAKEFAKE1234"})
+    assert k.status_code == 200
+    kid = k.json()["key"]["id"]
+
+    v = c.post(f"/api/keys/{kid}/verify")
+    assert v.status_code == 200
+    v_body = v.json()
+    assert v_body["ok"] is True
+    assert isinstance(v_body["custom_voices"], int)
+    assert isinstance(v_body["standard_voices"], int)
+
+    wav_b64 = _silent_wav_b64()
+    created = c.post("/api/custom-voices", json={
+        "key_id": kid,
+        "name": "HAL Studio Voice",
+        "description": "Use for product walkthroughs",
+        "source_audio_b64": wav_b64,
+        "consent_audio_b64": wav_b64,
+    })
+    assert created.status_code == 200
+    c_body = created.json()
+    voice = c_body["voice"]
+    assert voice["name"] == "HAL Studio Voice"
+    assert voice["kind"] == "custom"
+    vid = voice["id"]
+    pid = c_body["settings"]["active"]["id"]
+
+    listed = c.get(f"/api/keys/{kid}/voices").json()
+    assert any(item["id"] == vid for item in listed["custom"])
+
+    proj = c.post("/api/projects", json={"name": "Demo One"}).json()
+    c.patch(f"/api/projects/{proj['id']}", json={"profile_id": pid})
+    mp4 = store.pdir(proj["id"]) / "renders" / "render-01.mp4"
+    mp4.parent.mkdir(parents=True, exist_ok=True)
+    mp4.write_bytes(b"fake-mp4-bytes")
+    p_loaded = store.get(proj["id"])
+    from demolab.models import Render
+    p_loaded.renders.append(Render(
+        file=str(mp4),
+        seconds=4.2,
+        segments=1,
+        resolution="1080p",
+        created_at=1700000000.0,
+    ))
+    store.save(p_loaded)
+
+    projs = c.get("/api/projects").json()
+    match = next(item for item in projs if item["id"] == proj["id"])
+    assert match["profile_id"] == pid
+    assert len(match["renders_detail"]) == 1
+    assert match["renders_detail"][0]["index"] == 0
+    assert match["renders_detail"][0]["file"] == str(mp4)
+    assert match["renders_detail"][0]["resolution"] == "1080p"
+    assert match["renders_detail"][0]["size_bytes"] == len(b"fake-mp4-bytes")
+
+    deleted = c.delete(f"/api/profiles/{pid}?delete_remote=true")
+    assert deleted.status_code == 200
+    listed_after = c.get(f"/api/keys/{kid}/voices").json()
+    assert all(item["id"] != vid for item in listed_after["custom"])
+
+
+def test_local_audio_devices_and_live_capture(home):
+    import time
+    from demolab.api import app
+
+    c = TestClient(app, base_url="http://127.0.0.1")
+    devs = c.get("/api/audio/devices")
+    assert devs.status_code == 200
+    d_body = devs.json()
+    assert len(d_body["devices"]) >= 1
+    rec_id = d_body["recommended_id"]
+    assert rec_id
+
+    started = c.post("/api/audio/capture/start", json={"device_id": rec_id, "record": True})
+    assert started.status_code == 200
+    assert started.json()["active"] is True
+
+    time.sleep(0.15)
+    status = c.get("/api/audio/capture/status")
+    assert status.status_code == 200
+    st = status.json()
+    assert st["active"] is True
+    assert len(st["bands"]) == 48
+    assert any(b > 0 for b in st["bands"])
+
+    stopped = c.post("/api/audio/capture/stop")
+    assert stopped.status_code == 200
+    stop_body = stopped.json()
+    assert stop_body["ok"] is True
+    assert stop_body["seconds"] > 0
+    assert base64.b64decode(stop_body["audio_b64"])[:4] == b"RIFF"
